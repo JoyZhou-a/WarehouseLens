@@ -1,0 +1,111 @@
+# 仓储领域本体（ontology）
+# 这个文件定义：系统里有哪些概念、概念之间有什么关系、指标怎么算、规则怎么判。
+# 代码读取本文件来算数，口径不写在代码里。改这个文件，系统行为就跟着变。
+# 前端会展示 version 和 enabled 的规则。
+
+version: "2.1"
+namespace: wms
+updated_at: "2025-01-20"
+
+classes:
+  Warehouse:
+    label: 仓库
+    props: [id, name, type, city]
+    enums:
+      type: [finished_goods, service_parts, bonded]
+  SKU:
+    label: 物料
+    props: [id, name, category]
+  Inventory:
+    label: 库存
+    props: [sku_id, warehouse_id, on_hand, allocated, reserved, hold_qty, in_transit_arrived, safety_stock]
+  Batch:
+    label: 批次
+    props: [id, sku_id, warehouse_id, qty, expiry_days, cleared]
+  Shipment:
+    label: 在途
+    props: [id, sku_id, warehouse_id, batch_id, qty, eta_days]
+  Order:
+    label: 订单
+    props: [id, customer, sku_id, qty, due_days, type]
+    enums:
+      type: [new_order, replenish, after_sales]
+
+relations:
+  - name: stored_in
+    label: 库存位于仓库
+    from: Inventory
+    to: Warehouse
+  - name: has_batch
+    label: 库存包含批次
+    from: Inventory
+    to: Batch
+  - name: substitute_of
+    label: 物料可替代
+    from: SKU
+    to: SKU
+    props: [restriction]
+  - name: in_transit_to
+    label: 在途运往仓库
+    from: Shipment
+    to: Warehouse
+  - name: ordered_for
+    label: 订单针对物料
+    from: Order
+    to: SKU
+
+metrics:
+  available_inventory:
+    label: 可用库存量
+    formula: on_hand - allocated - reserved - hold_qty + in_transit_arrived
+    unit: 台
+    note: 已分配、已预留、被扣留都不算可用
+  promiseable_qty:
+    label: 可承诺量
+    formula: available_inventory - safety_stock
+    unit: 台
+
+constraints:
+  - id: C1
+    label: 批次先进先出
+    kind: ordering
+    desc: 同一物料优先消耗 expiry_days 更小的批次
+  - id: C2
+    label: 替代料受限
+    kind: restriction
+    desc: restriction 为空或命中当前订单范围的替代关系才生效
+
+rules:
+  - id: R1
+    label: 临期批次不参与新单承诺
+    enabled: true
+    when:
+      order_type: new_order
+      batch_expiry_days_lt: 30
+    then: exclude_batch
+  - id: R2
+    label: 保税仓未清关批次不计可用
+    enabled: true
+    when:
+      warehouse_type: bonded
+      batch_cleared: 0
+    then: exclude_batch
+  - id: R3
+    label: 保税仓批次默认不可提前承诺
+    enabled: true
+    when:
+      warehouse_type: bonded
+    then: exclude_warehouse
+  - id: R4
+    label: 备件仓库存只服务售后
+    enabled: true
+    when:
+      warehouse_type: service_parts
+      order_type: new_order
+    then: exclude_warehouse
+
+conflicts:
+  - id: X1
+    on: available_inventory
+    views: [sales_view, plan_view]
+    resolution: 承诺类问题用 sales_view，补货类问题用 plan_view
