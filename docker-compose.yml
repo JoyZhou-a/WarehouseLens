@@ -79,6 +79,9 @@ services:
     image: bitnamilegacy/minio:latest
     container_name: wms-minio
     restart: unless-stopped
+    # Bitnami 镜像默认以 uid 1001 运行，写不了 root 拥有的命名卷，
+    # 会报 FATAL Unable to initialize backend: file access denied 并循环重启。
+    user: "0:0"
     environment:
       # 写死，不要用变量覆盖：milvus 那边默认就用 minioadmin/minioadmin 连 S3，
       # 这里改了两边就对不上，会报 Access Denied。
