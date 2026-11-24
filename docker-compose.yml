@@ -74,12 +74,16 @@ services:
       - etcd_data:/etcd
 
   minio:
-    image: minio/minio:latest
+    # 官方 minio/minio 与 quay.io/minio/minio 已对匿名拉取关闭（denied / 401），
+    # 换 Bitnami 的归档镜像。变量名和普通 minio 不同，是 MINIO_ROOT_USER/PASSWORD。
+    image: bitnamilegacy/minio:latest
     container_name: wms-minio
     restart: unless-stopped
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      # 写死，不要用变量覆盖：milvus 那边默认就用 minioadmin/minioadmin 连 S3，
+      # 这里改了两边就对不上，会报 Access Denied。
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
     command: minio server /minio_data --console-address ":9001"
     volumes:
       - minio_data:/minio_data
