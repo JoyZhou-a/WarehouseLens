@@ -14,7 +14,74 @@
 | Redis | agent 共享状态与 trace | 容器 wms-redis |
 | FastAPI | 后端与前端页面 | `app/` |
 
-## 本地启动
+## 云上实测（117.72.15.179）
+
+四个库已经在云上跑着，本地 `.env` 指过去就能用。实测结果：
+
+| 库 | 版本 | 实测内容 | 十次连接（最小/平均/最大） |
+|---|---|---|---|
+| MySQL | 8.0.46 | 7 张表，库存 30 行 / 批次 40 / 在途 10 / 订单 20 | 39 / 85 / 136 ms |
+| Neo4j | 5.20.0 | 106 节点 / 144 关系 | 37 / 62 / 102 ms |
+| Redis | 7.4.12 | PING 通，state 与 trace 落这里 | 37 / 53 / 94 ms |
+| Milvus | v2.4.9 | 2 个 collection（bge 1024 维 / hash 512 维），各 49 条向量 | 35 / 61 / 102 ms |
+
+一键复验（只读，不写数据）：
+
+```bash
+python scripts/netcheck.py      # 每端口连 10 次 + 四个协议握手
+python scripts/check_deps.py    # 四库体检 + 数据条数
+python scripts/smoke_demo.py    # 跑三个演示问题，断言数字与数据源（需先起服务）
+python scripts/seed.py --check  # 数据自检：引用完整性、数量对得上、文档与规则对得上
+```
+
+四个脚本的退出码在全部通过时才为 0，可以直接用在彩排脚本里。`seed.py` 每次写库前都会自动跑一遍自检，数据不自洽就拒绝写入。
+
+### 库掉线时会发生什么
+
+工具层内置本地数据集，真库不可用时退回本地并继续出结果，但**降级不是静默的**：降级时终端会打印原因，轨迹里每步都标 `backend`（`mysql` / `neo4j` / `milvus` / `local`），20 秒冷却后自动重试真库。`smoke_demo.py` 会断言三个数据源必须分别是 `mysql`、`neo4j`、`milvus`，防止演示时其实在读本地常量。
+
+## 本机直接跑
+
+数据库在云上，本机不需要 Docker：
+
+```bash
+copy .env.example .env      # 四个 host 改成 117.72.15.179（本仓库已有 .env）
+python scripts/seed.py      # 首次或要重置数据时执行，可 --only mysql 单库灌
+python run.py               # 打开 http://127.0.0.1:8000
+```
+
+### 接大模型
+
+`.env` 里三项，key 建议走系统环境变量或服务器上的 `EnvironmentFile`，不要写进仓库：
+
+```
+LLM_MODE=live
+LLM_API_KEY=sk-...
+LLM_MODEL=deepseek-flash
+LLM_REVIEW=off          # 模型复核默认关闭；打开会每题多 7-10 秒
+```
+
+`LLM_MODE=replay` 完全不调 API，答案走确定性模板，断网也能演示。live 模式下每题多 1-2 次调用，耗时约 6-8 秒；模型调用失败会自动退回模板，不会让请求失败。
+
+### 向量化：bge-m3 与本地哈希双路
+
+```
+EMBED_PROVIDER=bge                       # bge 走租的接口，hash 走本地字符哈希
+EMBED_API_KEY=sk-...                     # 硅基流动的 key，BAAI/bge-m3 不计费
+EMBED_MODEL=BAAI/bge-m3
+EMBED_DIM_BGE=1024
+RERANK_ENABLED=off                       # 23 个片段用不上重排，见 docs/agent-design.md
+```
+
+两个 provider 各占一个 collection（`wms_docs_bge` 1024 维、`wms_docs_hash` 512 维），因为维度不同不能混查。bge 不可用时整条链自动切到 hash，页面 `backend` 会显示 `milvus/bge` 或 `milvus/hash`。换 provider 后要重灌向量：`python scripts/seed.py --only milvus`。
+
+演示入口支持深链，现场不用手打问题：
+
+- `/?q=Q1` 直接跑 Q1，`&cmp=1` 加上 RAG 并排对比
+- `/?q=Q3&cmp=1` 跑规则变更
+- `/?q=Q2&onto=1` 顺带展开本体面板
+
+## 本地启动（自己起数据库时用）
 
 ```bash
 # 1. 环境

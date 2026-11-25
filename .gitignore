@@ -15,3 +15,7 @@ logs/
 .tmp/
 .piptmp/
 wheelhouse/
+
+# 彩排截图与权限修复留档
+shots/
+acl-recovery/

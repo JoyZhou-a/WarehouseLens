@@ -106,6 +106,7 @@ rules:
 
 conflicts:
   - id: X1
-    on: available_inventory
+    # 字段名不要写成 on：YAML 1.1 会把裸 on 解析成布尔 True，键就不是字符串了
+    metric: available_inventory
     views: [sales_view, plan_view]
     resolution: 承诺类问题用 sales_view，补货类问题用 plan_view

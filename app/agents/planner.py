@@ -1,7 +1,11 @@
 """规划 agent。
 
-负责把自然语言问题变成执行计划：识别意图、抽出物料和数量、决定调用哪几个 agent。
-有模型时用模型做分类，没模型时用关键词规则，两条路结果结构一致。
+把自然语言问题变成执行计划：
+1. 结构抽取：物料、数量、客户、时间窗；
+2. 意图判定：承诺 / 缺货归因 / 规则变更 / 列表查询；
+3. 有模型时用模型复核意图（标签集合已扩到 4 个），没有就用关键词。
+
+注意：这里的「计划」只是策略提示，真正执行多 agent 编排时由主 agent 决定派发。
 """
 
 from __future__ import annotations
@@ -10,13 +14,18 @@ import re
 
 from .. import llm
 
-SKU_RE = re.compile(r"\b([A-Z]{2,3}-[A-Z0-9]{1,6}-\d{1,4})\b")
+# 物料号形态：NB-X1C-14、NB-T14-G5、SP-MB-14 都要能认出来。
+# 最后一段不能限定纯数字——T14 的后缀是 G5，限定 \d 会静默回退到默认物料，
+# 拿错物料的数据去回答，比报错更糟。
+SKU_RE = re.compile(r"\b([A-Z]{2,3}-[A-Z0-9]{1,6}-[A-Z0-9]{1,6})\b")
 CUST_RE = re.compile(r"(C-\d{4}-\d{3})")
 QTY_RE = re.compile(r"(\d{2,5})\s*(?:台|件|pcs)")
+WINDOW_RE = re.compile(r"(?:未来|接下来|这两天|这周|本周|下周|今天|明天)?\s*(\d{1,2})\s*(?:个)?(?:天|日)")
 
 INTENTS = [
-    ("rule_change", ["规则", "生效", "合同", "允许", "变更", "影响", "本体"]),
-    ("shortage", ["缺货", "为什么", "原因", "归因", "上升", "异常"]),
+    ("rule_change", ["规则", "生效", "合同", "允许", "变更", "影响", "本体", "放开", "开启"]),
+    ("shortage", ["缺货", "为什么", "原因", "归因", "上升", "异常", "延误", "扣留"]),
+    ("lookup", ["哪些", "有哪些", "清单", "列表", "要发", "到仓", "快过期", "临期", "多少单"]),
     ("commit", ["承诺", "交期", "能不能", "能发", "够不够", "交付", "调拨"]),
 ]
 
@@ -36,7 +45,30 @@ PLANS = {
         {"agent": "inventory", "goal": "算规则生效前后的可用量差异"},
         {"agent": "graph", "goal": "查规则与文档的治理关系"},
     ],
+    "lookup": [
+        {"agent": "inventory", "goal": "按时间窗列出订单/在途/临期批次"},
+        {"agent": "doc", "goal": "检索相关作业规范作为口径依据"},
+    ],
 }
+
+
+def _window_days(question: str) -> int:
+    m = WINDOW_RE.search(question)
+    if m:
+        return max(1, min(30, int(m.group(1))))
+    if "今天" in question:
+        return 1
+    if any(k in question for k in ("这周", "本周", "下周")):
+        return 7
+    return 7
+
+
+def _lookup_kind(question: str) -> str:
+    if any(k in question for k in ("过期", "临期", "效期")):
+        return "batches"
+    if any(k in question for k in ("到仓", "在途", "到货")):
+        return "shipments"
+    return "orders"
 
 
 def parse(question: str) -> dict:
@@ -50,11 +82,13 @@ def parse(question: str) -> dict:
             break
     return {
         "intent": intent,
-        "sku_id": skus[0] if skus else "NB-X1C-14",
+        "sku_id": skus[0] if skus else None,
         "customer": customers[0] if customers else None,
-        "demand": int(qtys[0]) if qtys else 500,
+        "demand": int(qtys[0]) if qtys else None,
         "target_rule": "R3" if "保税" in question else None,
         "order_type": "new_order",
+        "window_days": _window_days(question),
+        "lookup_kind": _lookup_kind(question) if intent == "lookup" else None,
     }
 
 
@@ -62,13 +96,17 @@ def plan(question: str) -> dict:
     parsed = parse(question)
     steps = PLANS[parsed["intent"]]
 
-    # 有模型时让模型复核意图，只能在三个意图里选，避免它自由发挥
+    # 有模型时让模型复核意图，只能在四个意图里选，避免它自由发挥
     verdict = llm.chat_json(
-        "你是意图分类器。只输出 JSON，字段 intent 取值 commit / shortage / rule_change。",
+        "你是意图分类器。只输出 JSON，字段 intent 取值 "
+        "commit / shortage / rule_change / lookup。"
+        "lookup 表示「列清单」类问题（哪些货要发、哪些批次快过期、哪些在途会到）。",
         f"问题：{question}",
     )
     if verdict and verdict.get("intent") in PLANS:
         parsed["intent"] = verdict["intent"]
+        if parsed["intent"] == "lookup":
+            parsed["lookup_kind"] = _lookup_kind(question)
         steps = PLANS[parsed["intent"]]
         parsed["classified_by"] = "llm"
     else:

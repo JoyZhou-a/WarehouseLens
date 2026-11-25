@@ -33,32 +33,47 @@ def status() -> dict:
     }
 
 
-def chat(system: str, user: str, temperature: float = 0.2) -> str | None:
+def chat(system: str, user: str, temperature: float = 0.2,
+         max_tokens: int | None = None) -> str | None:
     """返回模型文本。不可用时返回 None，调用方自己走模板。"""
     if not available():
         return None
+    payload = {
+        "model": config.LLM_MODEL,
+        "temperature": temperature,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    if max_tokens:
+        # 这是推理模型：reasoning_content 也计入 max_tokens，
+        # 给太小会把正文截断（finish_reason=length），所以默认留足预算。
+        payload["max_tokens"] = max_tokens
     try:
         resp = httpx.post(
             f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
-            json={
-                "model": config.LLM_MODEL,
-                "temperature": temperature,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            },
+            json=payload,
             timeout=config.LLM_TIMEOUT,
         )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception:
+        if resp.status_code != 200:
+            # 静默失败会让演示变成「模型没参与」，必须打到日志里
+            print(f"[llm] HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
+            return None
+        data = resp.json()
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            print(f"[llm] 输出被 max_tokens 截断（completion={data.get('usage', {}).get('completion_tokens')}）",
+                  flush=True)
+        return choice["message"]["content"]
+    except Exception as exc:
+        print(f"[llm] 调用失败 {type(exc).__name__}: {exc}", flush=True)
         return None
 
 
-def chat_json(system: str, user: str) -> dict | None:
-    text = chat(system, user)
+def chat_json(system: str, user: str, max_tokens: int | None = None) -> dict | None:
+    text = chat(system, user, max_tokens=max_tokens)
     if not text:
         return None
     match = re.search(r"\{.*\}", text, re.S)

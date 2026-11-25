@@ -1,25 +1,56 @@
 """校验 agent。
 
 不产生新内容，只检查执行结果能不能自洽。检查项：
-1. 每个关键数字有没有来源
-2. 被规则挡掉的批次有没有给出规则编号
-3. 各仓可承诺量加起来是否等于总数
-4. 结论里的数字是否都出现在中间结果里
+1. 按口径独立重算可承诺合计，和 agent 给的总数比对
+2. 规则挡掉的仓/批次有没有真的被排除，且给出了规则编号
+3. 调拨量不超过缺口
+4. 结论里的数字是否都能在中间结果里找到来源
 
 有模型时再让模型读一遍答案和证据，没有模型时只做确定性检查。
 """
 
 from __future__ import annotations
 
+import json
 import re
 
-from .. import llm
+from .. import config, llm
 
-NUMBER_RE = re.compile(r"\b(\d{2,5})\b")
+NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _collect(obj, nums: set[float], texts: list[str]) -> None:
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _collect(v, nums, texts)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect(v, nums, texts)
+    elif isinstance(obj, bool):
+        return
+    elif isinstance(obj, (int, float)):
+        nums.add(float(obj))
+    elif isinstance(obj, str):
+        texts.append(obj)
+        for n in NUMBER_RE.findall(obj):
+            nums.add(float(n))
 
 
 def check(state: dict) -> dict:
     issues: list[dict] = []
+
+    intent = (state.get("parsed") or {}).get("intent")
+    if intent == "lookup":
+        # 列表类问题不做承诺数量校验，只确认真的取到了行
+        payload = (state.get("facts") or {}).get("inventory") or {}
+        rows = payload.get("rows")
+        if rows is None:
+            return {"passed": False, "issues": [
+                {"level": "error", "code": "NO_ROWS", "msg": "列表类问题没有取到任何数据"}]}
+        return {"passed": True, "issues": [
+            {"level": "info", "code": "LOOKUP",
+             "msg": f"列表类问题：取到 {len(rows)} 条，不做承诺数量校验"}]}
+
     inv = state.get("facts", {}).get("inventory") or {}
 
     if not inv:
@@ -28,10 +59,20 @@ def check(state: dict) -> dict:
         return {"passed": False, "issues": issues}
 
     whs = inv.get("warehouses", [])
-    total_independent = sum(w["promiseable"] for w in whs)
-    if total_independent != inv.get("total_promiseable"):
+    ranked = sorted(whs, key=lambda w: w["promiseable"], reverse=True)
+    primary = next((w for w in ranked if w["promiseable"] > 0), None)
+
+    # 独立重算：直接计入本单的 = 主供仓 + 保税仓（其余仓只能走调拨）
+    expected = sum(
+        w["promiseable"] for w in whs
+        if w["promiseable"] > 0 and (
+            (primary and w["warehouse_id"] == primary["warehouse_id"])
+            or w["warehouse_type"] == "bonded")
+    )
+    if expected != inv.get("total_promiseable"):
         issues.append({"level": "error", "code": "SUM_MISMATCH",
-                       "msg": f"各仓可承诺量之和 {total_independent} 与总数 {inv.get('total_promiseable')} 不一致"})
+                       "msg": f"按口径重算的可承诺合计 {expected}（主供仓+保税仓）与总数 "
+                              f"{inv.get('total_promiseable')} 不一致"})
 
     for w in whs:
         if w["blocked_by"] and w["promiseable"] != 0:
@@ -43,38 +84,78 @@ def check(state: dict) -> dict:
             issues.append({"level": "warn", "code": "SUPPLY_NO_REASON",
                            "msg": f"在途 {s['shipment']} 被排除但没有给出原因"})
 
+    gap = max(0, int(inv.get("demand") or 0) - int(inv.get("total_promiseable") or 0))
+    moved = sum(int(t["qty"]) for t in inv.get("transfers", []))
+    if moved > gap:
+        issues.append({"level": "error", "code": "TRANSFER_OVER_GAP",
+                       "msg": f"调拨量 {moved} 超过缺口 {gap}，存在重复计算"})
+
     if not state.get("evidence") and state.get("parsed", {}).get("intent") in ("commit", "rule_change"):
         issues.append({"level": "warn", "code": "NO_EVIDENCE",
                        "msg": "结论没有文档依据"})
 
     answer = state.get("answer") or ""
     if answer:
-        mentioned = {int(n) for n in NUMBER_RE.findall(answer)}
-        known = {int(inv.get("total_promiseable", 0)), int(inv.get("demand", 0))}
-        known |= {int(w["promiseable"]) for w in whs}
-        known |= {int(t["qty"]) for t in inv.get("transfers", [])}
-        stray = {n for n in mentioned if n > 100 and n not in known}
+        known: set[float] = set()
+        texts: list[str] = []
+        _collect(inv, known, texts)
+        _collect(state.get("rule_impact") or {}, known, texts)
+        _collect(state.get("evidence") or [], known, texts)
+        mentioned = {float(n) for n in NUMBER_RE.findall(answer)}
+        stray = {n for n in mentioned
+                 if n > 100 and not any(abs(n - k) < 1e-6 for k in known)}
         if stray:
             issues.append({"level": "warn", "code": "NUMBER_NOT_TRACED",
                            "msg": f"答案里这些数字在中间结果里找不到来源：{sorted(stray)}"})
 
     llm_note = _llm_review(state)
     if llm_note:
-        issues.append({"level": "info", "code": "LLM_REVIEW", "msg": llm_note})
+        issues.append({"level": "info", "code": "LLM_REVIEW",
+                       "msg": f"模型复核（仅参考，不参与通过判断）：{llm_note}"})
 
     passed = not any(i["level"] == "error" for i in issues)
     return {"passed": passed, "issues": issues}
 
 
 def _llm_review(state: dict) -> str | None:
+    """模型复核只作参考，不参与通过与否的判断。
+
+    要给出聚合口径，否则它会按「各仓之和」重算，把调拨源当成可直接承诺的仓，
+    得出「420 应该是 510」这类我们自己口径下的假问题。
+    """
+    if not config.LLM_REVIEW:
+        return None
     if not llm.available():
         return None
-    fact_text = str(state.get("facts", {}))[:2000]
-    answer = state.get("answer", "")
-    verdict = llm.chat(
-        "你是供应链数据校验员。只回答一句话，指出答案里与数据不一致的地方；没有就回答 OK。",
-        f"数据：{fact_text}\n答案：{answer}",
+    inv = state.get("facts", {}).get("inventory") or {}
+    digest = {
+        "可承诺合计": inv.get("total_promiseable"),
+        "需求": inv.get("demand"),
+        "缺口": inv.get("gap"),
+        "调拨方案后可用": inv.get("after_transfer"),
+        "调拨": [f"{t['from']} {t['qty']} 台" for t in inv.get("transfers", [])],
+        "各仓": [{"仓": w["warehouse_name"], "可承诺": w["promiseable"],
+                  "被规则排除前的可承诺": w["raw_promiseable"],
+                  "命中规则": w["blocked_by"]} for w in inv.get("warehouses", [])],
+        "在途": [{"单号": s["shipment"], "数量": s["qty"], "计入": s["countable"],
+                  "命中规则": s["blocked_by"]} for s in inv.get("supply", [])],
+    }
+    if state.get("rule_impact"):
+        digest["规则影响"] = state["rule_impact"]
+
+    system = (
+        "你是供应链数据校验员。判断「答案」是否与「数据」矛盾，只回答一句话。\n"
+        "口径（必须按这个理解，不要自己重算合计）：\n"
+        "- 可承诺合计 = 主供仓（可承诺量最大的仓）+ 保税仓（未被规则排除时）；\n"
+        "- 其他成品仓只作为调拨源，不计入可承诺合计，出现在「调拨」里；\n"
+        "- 被规则排除的仓可承诺为 0；\n"
+        "- 命中规则的批次不计入可用量。\n"
+        "只标记确实矛盾的数字或归属；不要推测答案没说过的话，不要按各仓之和重算。\n"
+        "没有矛盾就只回答 OK。"
     )
+    user = (f"数据：{json.dumps(digest, ensure_ascii=False)}\n\n"
+            f"答案：{state.get('answer', '')}")
+    verdict = llm.chat(system, user, temperature=0.0)
     if not verdict or verdict.strip().upper().startswith("OK"):
         return None
     return verdict.strip()[:300]

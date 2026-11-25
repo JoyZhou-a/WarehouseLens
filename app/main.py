@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import threading
+import time
+
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import config, deps, llm
 from .ontology import get_ontology
-from .orchestrator import ask
+from .orchestrator import ask, new_task
 from .tools import doc_tool, graph_tool, mysql_tool
+from .tools import session as session_tool
 from .tools import state as state_tool
 
 app = FastAPI(title="WMS 仓储归因助手", version="0.1")
@@ -28,6 +33,11 @@ DEMO_QUESTIONS = [
 class AskBody(BaseModel):
     question: str
     mode: str = "system"
+    session_id: str | None = None
+
+
+class AskAsyncBody(AskBody):
+    pass
 
 
 class RuleBody(BaseModel):
@@ -73,9 +83,82 @@ def ask_api(body: AskBody) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题为空")
-    if body.mode not in ("system", "baseline"):
-        raise HTTPException(status_code=400, detail="mode 只能是 system 或 baseline")
-    return ask(question, body.mode)
+    if body.mode not in ("system", "pipeline", "baseline"):
+        raise HTTPException(status_code=400, detail="mode 只能是 system、pipeline 或 baseline")
+    return ask(question, body.mode, body.session_id)
+
+
+@app.post("/api/ask/async")
+def ask_async(body: AskAsyncBody) -> dict:
+    """后台跑，前端用 /api/events/{task_id} 订阅进度，避免等 15 秒白屏。"""
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题为空")
+    if body.mode not in ("system", "pipeline", "baseline"):
+        raise HTTPException(status_code=400, detail="mode 只能是 system、pipeline 或 baseline")
+    task_id = new_task()
+
+    def worker() -> None:
+        try:
+            ask(question, body.mode, body.session_id, task_id=task_id)
+        except Exception as exc:  # 后台线程的异常要落到 trace 里，否则前端一直转圈
+            state_tool.trace(task_id, "system", "exception", {}, False,
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0)
+            state_tool.save(task_id, {"task_id": task_id, "question": question,
+                                      "mode": body.mode, "answer": "执行失败，请重试",
+                                      "verification": {"passed": False, "issues": []},
+                                      "trace": state_tool.events(task_id)})
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.get("/api/events/{task_id}")
+def events(task_id: str) -> StreamingResponse:
+    """SSE：把 trace 增量吐给前端，最后一条发 state，前端据此收尾。"""
+
+    def gen():
+        seen = 0
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            evs = state_tool.events(task_id)
+            if len(evs) > seen:
+                for e in evs[seen:]:
+                    yield f"data: {json.dumps(e, ensure_ascii=False, default=str)}\n\n"
+                seen = len(evs)
+            st = state_tool.load(task_id)
+            if st:
+                yield "event: done\ndata: " + json.dumps(
+                    {"task_id": task_id, "elapsed_ms": st.get("elapsed_ms"),
+                     "agent_timings": st.get("agent_timings")}, ensure_ascii=False) + "\n\n"
+                return
+            yield ": ping\n\n"
+            time.sleep(0.15)
+        yield "event: timeout\ndata: {}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/session")
+def session_new() -> dict:
+    return {"session_id": session_tool.new_session()}
+
+
+@app.get("/api/sessions")
+def session_list() -> list[dict]:
+    return session_tool.list_sessions()
+
+
+@app.get("/api/session/{session_id}")
+def session_detail(session_id: str) -> dict:
+    return {"session_id": session_id, "messages": session_tool.messages(session_id)}
+
+
+@app.delete("/api/session/{session_id}")
+def session_delete(session_id: str) -> dict:
+    session_tool.clear(session_id)
+    return {"deleted": session_id}
 
 
 @app.get("/api/task/{task_id}")

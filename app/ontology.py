@@ -78,24 +78,34 @@ class Ontology:
     # ---------------------------------------------------------- 规则
 
     @staticmethod
-    def _match(when: dict, ctx: dict) -> bool:
+    def _match(when: dict, ctx: dict, thresholds: dict | None = None) -> bool:
         for key, expected in when.items():
             if key.endswith("_lt"):
                 base = key[:-3]
+                # 允许外部覆盖阈值，用于 what-if：例如把临期线从 30 天改成 20 天
+                limit = (thresholds or {}).get(base, expected)
                 actual = ctx.get(base)
-                if actual is None or not (actual < expected):
+                if actual is None or not (actual < limit):
                     return False
             else:
                 if ctx.get(key) != expected:
                     return False
         return True
 
-    def eval_rules(self, ctx: dict) -> list[dict]:
+    def eval_rules(self, ctx: dict, off: set[str] | None = None,
+                   thresholds: dict | None = None) -> list[dict]:
+        """按条件匹配规则。
+
+        off        临时关掉的规则 id（what-if 用，不改文件）
+        thresholds 临时覆盖阈值（what-if 用）
+        """
         hits = []
         for rule in self.rules:
             if not rule.get("enabled", True):
                 continue
-            if self._match(rule.get("when", {}), ctx):
+            if off and rule["id"] in off:
+                continue
+            if self._match(rule.get("when", {}), ctx, thresholds):
                 hits.append({
                     "id": rule["id"],
                     "label": rule.get("label", ""),
@@ -115,7 +125,8 @@ class Ontology:
         )
         if count == 0:
             raise KeyError(f"规则 {rule_id} 没有 enabled 字段")
-        self.path.write_text(new_text, encoding="utf-8")
+        # 固定写 LF：Windows 上默认会改成 CRLF，整个文件在 git 里变成全量改动
+        self.path.write_text(new_text, encoding="utf-8", newline="\n")
         self.reload()
         rule = next((r for r in self.rules if r["id"] == rule_id), None)
         return {"rule": rule_id, "enabled": bool(rule and rule.get("enabled")),

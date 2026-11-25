@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from neo4j import GraphDatabase
@@ -12,12 +13,40 @@ from neo4j import GraphDatabase
 from .. import config
 from . import dataset
 
-_degraded = False
+# 降级不是永久的：云上偶发一次超时不该让整场演示都退回本地数据。
+# 失败后冷却 20 秒，期间快速返回本地结果，到点自动再试真库。
+COOLDOWN = 20.0
+_degraded_at: float | None = None
+_last_error: str | None = None
 _driver = None
 
 
+def _degraded() -> bool:
+    if _degraded_at is None:
+        return False
+    return (time.time() - _degraded_at) < COOLDOWN
+
+
+def _mark_failed(exc: Exception | None = None) -> None:
+    global _degraded_at, _last_error
+    _degraded_at = time.time()
+    if exc is not None:
+        _last_error = f"{type(exc).__name__}: {exc}"
+        # 降级不能是静默的：打到服务日志，现场也能在终端看见
+        print(f"[graph_tool] 退回本地数据：{_last_error[:300]}", flush=True)
+
+
+def _mark_ok() -> None:
+    global _degraded_at
+    _degraded_at = None
+
+
+def last_error() -> str | None:
+    return _last_error
+
+
 def backend() -> str:
-    return "local" if _degraded else "neo4j"
+    return "local" if _degraded() else "neo4j"
 
 
 def driver():
@@ -25,7 +54,8 @@ def driver():
     if _driver is None:
         _driver = GraphDatabase.driver(
             config.NEO4J_URI, auth=config.NEO4J_AUTH,
-            connection_timeout=2, max_connection_lifetime=300,
+            # 云上 Bolt 首连要 200ms~1s，并发时更久，2 秒会误判成连不上
+            connection_timeout=8, max_connection_lifetime=300,
         )
     return _driver
 
@@ -36,25 +66,26 @@ def run(cypher: str, **params) -> list[dict[str, Any]]:
 
 
 def _try(cypher: str, params: dict, fallback):
-    global _degraded
-    if _degraded:
+    if _degraded():
         return fallback()
     try:
-        return run(cypher, **params)
-    except Exception:
-        _degraded = True
+        result = run(cypher, **params)
+        _mark_ok()
+        return result
+    except Exception as exc:
+        _mark_failed(exc)
         return fallback()
 
 
 def ping() -> bool:
-    global _degraded
-    if _degraded:
+    if _degraded():
         return False
     try:
         run("RETURN 1 AS ok")
+        _mark_ok()
         return True
-    except Exception:
-        _degraded = True
+    except Exception as exc:
+        _mark_failed(exc)
         return False
 
 
@@ -145,8 +176,8 @@ def rules_of_doc(doc_id: str) -> list[dict]:
 
     return _try(
         """
-        MATCH (d:Doc {id:$doc})-[:GOVERNS|OVERRIDES]->(r:Rule)
-        RETURN d.id AS doc, type(r) AS rel, r.id AS rule, r.label AS label,
+        MATCH (d:Doc {id:$doc})-[x:GOVERNS|OVERRIDES]->(r:Rule)
+        RETURN d.id AS doc, type(x) AS rel, r.id AS rule, r.label AS label,
                r.enabled AS enabled
         """,
         {"doc": doc_id},

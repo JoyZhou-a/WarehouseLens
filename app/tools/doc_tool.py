@@ -1,35 +1,54 @@
 """文档检索。优先走 Milvus，连不上就降级到本地关键词打分。
 
-降级是为了保证演示不问数据库能不能连上都能出证据。
-返回结构里带 backend 字段，前端会显示用的是哪条路径。
+两个 provider 各自的 collection：
+- wms_docs_bge   1024 维，BAAI/bge-m3（租的接口）
+- wms_docs_hash  512 维，本地字符哈希
+查询向量必须和索引用同一个 provider，所以切换是整条链一起切，不会混用。
+
+返回结构里带 backend（milvus/bge、milvus/hash、local），前端会显示用的是哪条路径。
 """
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from .. import config
 from .embedding import embed
 
 DOC_DIR = config.ROOT / "data" / "docs"
-_collection = None
+COOLDOWN = 20.0
+
+_collections: dict[str, object] = {}
+_failed_at: dict[str, float] = {}
 
 
-def _milvus():
-    global _collection
-    if _collection is None:
+def _collection(provider: str):
+    col = _collections.get(provider)
+    if col is None:
         from pymilvus import Collection, connections
 
         connections.connect(alias="default", host=config.MILVUS_HOST, port=config.MILVUS_PORT)
-        _collection = Collection(config.MILVUS_COLLECTION)
-        _collection.load()
-    return _collection
+        col = Collection(config.COLLECTION_BY_PROVIDER[provider])
+        col.load()
+        _collections[provider] = col
+    return col
 
 
-def _milvus_search(query: str, top_k: int) -> list[dict]:
-    col = _milvus()
+def active_provider() -> str:
+    """当前实际用哪个 provider。bge 失败后冷却期内退回 hash。"""
+    if config.ACTIVE_EMBED == "hash":
+        return "hash"
+    failed = _failed_at.get("bge")
+    if failed and (time.time() - failed) < COOLDOWN:
+        return "hash"
+    return "bge"
+
+
+def _milvus_search(query: str, top_k: int, provider: str) -> list[dict]:
+    col = _collection(provider)
     res = col.search(
-        data=[embed(query)],
+        data=[embed(query, provider)],
         anns_field="vector",
         param={"metric_type": "COSINE", "params": {"nprobe": 16}},
         limit=top_k,
@@ -45,13 +64,13 @@ def _milvus_search(query: str, top_k: int) -> list[dict]:
                 "chunk_no": entity.get("chunk_no"),
                 "text": entity.get("text"),
                 "score": round(float(h.score), 4),
-                "backend": "milvus",
+                "backend": f"milvus/{provider}",
             })
     return out
 
 
 def _fallback_search(query: str, top_k: int) -> list[dict]:
-    """Milvus 不可用时，用字符重合度打分，行为对使用方一致。"""
+    """Milvus 与两个 provider 都不可用时，用字符重合度打分，行为对使用方一致。"""
     q = set(_bigrams(query))
     scored = []
     for path in sorted(DOC_DIR.glob("*.md")):
@@ -74,12 +93,23 @@ def _bigrams(text: str) -> list[str]:
 
 
 def search(query: str, top_k: int = 4) -> list[dict]:
+    provider = active_provider()
     try:
-        hits = _milvus_search(query, top_k)
+        hits = _milvus_search(query, top_k, provider)
         if hits:
             return hits
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[doc_tool] {provider} 检索失败，切换：{type(exc).__name__}: {exc}", flush=True)
+        _failed_at[provider] = time.time()
+
+    if provider != "hash":
+        try:
+            hits = _milvus_search(query, top_k, "hash")
+            if hits:
+                return hits
+        except Exception as exc:
+            print(f"[doc_tool] hash 检索也失败：{type(exc).__name__}: {exc}", flush=True)
+
     return _fallback_search(query, top_k)
 
 
@@ -89,8 +119,9 @@ def read_doc(doc_id: str) -> str | None:
 
 
 def backend() -> str:
+    provider = active_provider()
     try:
-        _milvus()
-        return "milvus"
+        _collection(provider)
+        return f"milvus/{provider}"
     except Exception:
         return "local"

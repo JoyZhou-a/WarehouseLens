@@ -31,5 +31,7 @@ def run(parsed: dict) -> dict:
         "substitute_paths": paths,
         "inbound": supply,
         "rule_governance": rules_from_docs,
+        # 真走了 Neo4j 还是退回本地数据，前端和自检都要能看见
+        "backend": graph_tool.backend(),
         "source": "neo4j",
     }
