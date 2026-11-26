@@ -125,8 +125,12 @@ footer{text-align:center;color:var(--muted);font-size:11.5px;padding:6px}
         <button class="primary" id="btn-send">发送</button>
         <select id="mode" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit">
           <option value="system">多 agent 编排</option>
+          <option value="system_nograph">多 agent（无图谱）</option>
+          <option value="rag_data">强基线（数据+规则，模型自己算）</option>
+          <option value="rag_data_graph">强基线 + 图谱</option>
+          <option value="nl2sql">NL2SQL（模型自己写 SQL）</option>
           <option value="pipeline">固定流水线（对照）</option>
-          <option value="baseline">RAG 基线（对照）</option>
+          <option value="baseline">纯 RAG（只给文档）</option>
         </select>
         <button id="btn-onto">本体定义</button>
       </div>
@@ -147,6 +151,9 @@ const fmt = (n) => (n === null || n === undefined) ? "-" : Number(n).toLocaleStr
 
 const ROLE = {planner:"规划", main:"主 agent", inventory:"库存子 agent", graph:"图谱子 agent",
               doc:"文档子 agent", verifier:"校验", system:"系统"};
+const MODE_LABEL = {system:"多 agent 编排", system_nograph:"多 agent（无图谱）",
+                    rag_data:"强基线（数据+规则）", rag_data_graph:"强基线+图谱",
+                    nl2sql:"NL2SQL", pipeline:"固定流水线", baseline:"纯 RAG"};
 let SESSION = localStorage.getItem("wms_session") || "";
 let CURRENT = null;   // 当前任务状态
 let es = null;
@@ -253,7 +260,7 @@ function follow(taskId, answerEl) {
   });
 }
 
-const stampOf = (st) => `<div class="muted small" style="margin-top:8px">${st.elapsed_ms}ms · ${st.mode}</div>`;
+const stampOf = (st) => `<div class="muted small" style="margin-top:8px">${st.elapsed_ms}ms · ${MODE_LABEL[st.mode] || st.mode}</div>`;
 
 /* ---------------- 运行时进度 ---------------- */
 function onStep(e) {
@@ -315,7 +322,7 @@ function renderRun(st) {
     || '<div class="small">没有发现问题</div>';
 
   $("#run-body").innerHTML = `
-    <div class="kv"><span>模式</span><b>${st.mode}</b></div>
+    <div class="kv"><span>模式</span><b>${MODE_LABEL[st.mode] || st.mode}</b></div>
     <div class="kv"><span>总耗时</span><b>${st.elapsed_ms}ms</b></div>
     <div class="kv"><span>提问意图</span><b>${(st.parsed||{}).intent || "-"}</b></div>
     <table class="t"><thead><tr><th>角色</th><th class="n">耗时</th><th class="n">步</th><th>路径</th></tr></thead>

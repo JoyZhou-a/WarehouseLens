@@ -62,3 +62,38 @@ CREATE TABLE IF NOT EXISTS orders (
   due_days  INT NOT NULL,
   type      VARCHAR(32) NOT NULL DEFAULT 'new_order'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 供应商与采购单：让「供应商 → 采购单 → 批次 → 订单 → 客户」这条链在关系库里也成立，
+-- 否则用图查得出来、用 SQL 查不出来，NL2SQL 对照就成了稻草人。
+CREATE TABLE IF NOT EXISTS customers (
+  id     VARCHAR(32) PRIMARY KEY,
+  name   VARCHAR(64) NOT NULL,
+  tier   VARCHAR(16),
+  region VARCHAR(16)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS suppliers (
+  id     VARCHAR(32) PRIMARY KEY,
+  name   VARCHAR(64) NOT NULL,
+  region VARCHAR(16),
+  tier   VARCHAR(16)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id          VARCHAR(32) PRIMARY KEY,
+  supplier_id VARCHAR(32) NOT NULL,
+  sku_id      VARCHAR(32) NOT NULL,
+  qty         INT NOT NULL DEFAULT 0,
+  eta_days    INT NOT NULL DEFAULT 0,
+  status      VARCHAR(16) NOT NULL DEFAULT 'open',
+  KEY idx_supplier (supplier_id),
+  KEY idx_sku (sku_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 批次与采购单的对应（不 ALTER batches，避免存量库升级要迁移）
+CREATE TABLE IF NOT EXISTS batch_po (
+  batch_id VARCHAR(32) PRIMARY KEY,
+  po_id    VARCHAR(32) NOT NULL,
+  KEY idx_po (po_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+

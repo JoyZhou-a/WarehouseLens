@@ -34,6 +34,11 @@ GRAPH_TOOLS = [
     Tool("get_inbound_chain", "在途→物料→仓→批次的链路", ops.get_inbound_chain),
     Tool("get_rule_sources", "某条规则出自哪些文档、被谁覆盖", ops.get_rule_sources),
     Tool("get_rule_governance", "某份文档治理了哪些规则", ops.get_rule_governance),
+    Tool("impact_of_rule", "某条规则生效会影响哪些订单和客户（规则→批次→物料→订单→客户）",
+         ops.impact_of_rule),
+    Tool("supplier_trace", "某供应商的采购单、批次、客户（5 跳）", ops.supplier_trace),
+    Tool("substitute_coverage", "替代链能覆盖多少未交付需求（替代链 × 可用量 × 订单）",
+         ops.substitute_coverage),
 ]
 
 DOC_TOOLS = [
@@ -107,7 +112,10 @@ def task_text(agent: str, question: str, parsed: dict) -> str:
         lines.append(f"这是列表类问题，用 {tool}(window={window}) 取数据，必要时再补一次过滤。")
     elif parsed.get("intent") == "rule_change":
         lines.append("这是规则变更/影响类问题：需要算「规则生效前」和「关掉目标规则后」两组数，"
-                     "用 simulate(sku, demand, {rule_off:[规则]}) 对比。")
+                     "用 simulate(sku, demand, {rule_off:[规则]}) 对比；"
+                     "如果问影响面（哪些订单/客户），用 impact_of_rule(rule_id, within_days)。")
+    if parsed.get("supplier_id"):
+        lines.append(f"问题涉及供应商 {parsed['supplier_id']}，用 supplier_trace 查它的采购单、批次和客户。")
     lines.append("请用工具取证并给出结论所需的事实。")
     return "\n".join(lines)
 
@@ -147,6 +155,9 @@ def run_worker(name: str, question: str, parsed: dict, trace=None) -> dict:
             norm["rule_governance"] = obs["get_rule_governance"].get("rows") or []
         if "get_inbound_chain" in obs:
             norm["inbound"] = obs["get_inbound_chain"].get("rows") or []
+        for key in ("impact_of_rule", "supplier_trace", "substitute_coverage"):
+            if key in obs:
+                norm[key] = obs[key]
         if out.get("result"):
             norm["_agent_note"] = str(out["result"])[:300]
         out["result"] = norm

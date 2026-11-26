@@ -216,6 +216,113 @@ def get_rule_governance(doc_id: str) -> dict:
     return {"doc": doc_id, "rows": graph_tool.rules_of_doc(doc_id), "backend": graph_tool.backend()}
 
 
+# ---------------------------------------------------------------- 多跳：影响面 / 供应商 / 替代覆盖
+
+def impact_of_rule(rule_id: str = "R1", within_days: int = 14,
+                   expiry_threshold: int = 30) -> dict:
+    """某条规则生效会影响哪些订单、哪些客户。
+
+    Rule → Batch（被排除）→ SKU → Order（时间窗内）→ Customer，4 跳。
+    关系库里要递归 CTE + 多次 join，规则条件还得硬编码进 SQL。
+    """
+    rid = _resolve_rule(rule_id)
+    cypher = """
+    MATCH (b:Batch)-[:STORED_IN]->(w:Warehouse)
+    WHERE w.type <> 'service_parts'
+      AND (($rid = 'R1' AND b.expiry_days < $threshold)
+        OR ($rid = 'R2' AND w.type = 'bonded' AND b.cleared = 0)
+        OR ($rid = 'R3' AND w.type = 'bonded'))
+    OPTIONAL MATCH (k:SKU {id: b.sku_id})<-[:ORDERED_FOR]-(o:Order)-[:TO_CUSTOMER]->(c:Customer)
+    WHERE o.due_days <= $window AND o.type = 'new_order'
+    RETURN b.id AS batch, b.sku_id AS sku, b.qty AS batch_qty, b.expiry_days AS expiry,
+           w.name AS warehouse,
+           collect(DISTINCT {order: o.id, qty: o.qty, due: o.due_days,
+                             customer: c.id, tier: c.tier})[..8] AS orders
+    ORDER BY expiry LIMIT 40
+    """
+    rows = graph_tool.run(cypher, rid=rid, threshold=int(expiry_threshold),
+                          window=int(within_days))
+    orders, customers, skus = {}, set(), set()
+    for r in rows:
+        skus.add(r["sku"])
+        for o in (r.get("orders") or []):
+            if o and o.get("order"):
+                orders[o["order"]] = o
+                if o.get("customer"):
+                    customers.add(o["customer"])
+    return {
+        "rule": rid, "window_days": int(within_days),
+        "batches": [{"batch": r["batch"], "sku": r["sku"], "warehouse": r["warehouse"],
+                     "qty": r["batch_qty"], "expiry_days": r["expiry"]} for r in rows],
+        "batch_count": len(rows), "skus": sorted(skus),
+        "orders": list(orders.values())[:20], "order_count": len(orders),
+        "customer_count": len(customers),
+        "order_qty": sum(int(o.get("qty") or 0) for o in orders.values()),
+        "backend": graph_tool.backend(),
+    }
+
+
+def supplier_trace(supplier_id: str) -> dict:
+    """某供应商的批次流向了哪些物料、哪些客户（5 跳）。"""
+    cypher = """
+    MATCH (sp:Supplier {id:$sid})<-[:PLACED_WITH]-(po:PurchaseOrder)
+    OPTIONAL MATCH (po)-[:CONTAINS]->(k:SKU)
+    OPTIONAL MATCH (po)<-[:FROM_PO]-(b:Batch)-[:STORED_IN]->(w:Warehouse)
+    OPTIONAL MATCH (k)<-[:ORDERED_FOR]-(o:Order)-[:TO_CUSTOMER]->(c:Customer)
+    RETURN po.id AS po, po.qty AS po_qty, po.status AS status, k.id AS sku,
+           collect(DISTINCT {batch: b.id, qty: b.qty, expiry: b.expiry_days,
+                             warehouse: w.name})[..6] AS batches,
+           collect(DISTINCT {order: o.id, qty: o.qty, customer: c.id,
+                             tier: c.tier, due: o.due_days})[..8] AS orders
+    LIMIT 30
+    """
+    rows = graph_tool.run(cypher, sid=supplier_id)
+    customers, orders, skus = set(), {}, set()
+    for r in rows:
+        if r.get("sku"):
+            skus.add(r["sku"])
+        for o in (r.get("orders") or []):
+            if o and o.get("order"):
+                orders[o["order"]] = o
+                if o.get("customer"):
+                    customers.add(o["customer"])
+    return {
+        "supplier": supplier_id,
+        "po_count": len([r for r in rows if r.get("po")]),
+        "purchase_orders": [{"po": r["po"], "sku": r["sku"], "qty": r["po_qty"],
+                             "status": r["status"]} for r in rows if r.get("po")][:12],
+        "skus": sorted(skus),
+        "orders": list(orders.values())[:20],
+        "customer_count": len(customers), "customers": sorted(customers),
+        "backend": graph_tool.backend(),
+    }
+
+
+def substitute_coverage(sku: str, window_days: int = 14, max_hops: int = 3) -> dict:
+    """替代链能覆盖多少未交付需求（替代链 × 可用量 × 时间窗内订单）。"""
+    onto = get_ontology()
+    paths = graph_tool.transitive(sku)
+    targets = {p["path"][-1] for p in paths if p.get("path")}
+    rows = []
+    for t in sorted(targets):
+        result = inv_agent.run(onto, {"sku_id": t, "demand": 0})
+        found = graph_tool.run(
+            "MATCH (o:Order)-[:ORDERED_FOR]->(:SKU {id:$sku}) WHERE o.due_days <= $window "
+            "RETURN collect({order: o.id, qty: o.qty, due: o.due_days})[..8] AS orders",
+            sku=t, window=int(window_days))
+        open_orders = (found[0]["orders"] if found else []) or []
+        open_orders = [o for o in open_orders if o and o.get("order")]
+        rows.append({
+            "substitute": t,
+            "promiseable": result["total_promiseable"],
+            "open_orders": len(open_orders),
+            "open_qty": sum(int(o.get("qty") or 0) for o in open_orders),
+        })
+    return {"sku": sku, "paths": paths, "max_hops": int(max_hops), "targets": rows,
+            "total_promiseable": sum(r["promiseable"] for r in rows),
+            "backend": graph_tool.backend()}
+
+
 def search_docs(query: str, top_k: int = 4) -> dict:
     """在 SOP/合同/邮件里做语义检索。"""
     hits = doc_tool.search(query, int(top_k))

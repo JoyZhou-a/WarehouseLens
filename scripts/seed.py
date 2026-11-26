@@ -99,6 +99,11 @@ SHIPMENTS = [(s["id"], s["sku_id"], s["warehouse_id"], s["batch_id"], s["qty"],
 SUBSTITUTES = [(s["from_sku"], s["to_sku"], s["restriction"]) for s in _ds.SUBSTITUTES]
 ORDERS = [(o["id"], o["customer"], o["sku_id"], o["qty"], o["due_days"], o["type"])
           for o in _ds.ORDERS]
+CUSTOMERS = [(c["id"], c["name"], c["tier"], c["region"]) for c in _ds.CUSTOMERS]
+SUPPLIERS = [(s["id"], s["name"], s["region"], s["tier"]) for s in _ds.SUPPLIERS]
+PURCHASE_ORDERS = [(p["id"], p["supplier_id"], p["sku_id"], p["qty"], p["eta_days"], p["status"])
+                   for p in _ds.PURCHASE_ORDERS]
+BATCH_PO = [(b["id"], b.get("po_id") or "PO-2025-0001") for b in _ds.BATCHES]
 
 
 def ontology() -> dict:
@@ -149,10 +154,25 @@ def seed_mysql(onto: dict) -> None:
             "VALUES(%s,%s,%s,%s,%s,%s)",
             ORDERS,
         )
+        cur.executemany(
+            "REPLACE INTO customers(id,name,tier,region) VALUES(%s,%s,%s,%s)", CUSTOMERS
+        )
+        cur.executemany(
+            "REPLACE INTO suppliers(id,name,region,tier) VALUES(%s,%s,%s,%s)", SUPPLIERS
+        )
+        cur.executemany(
+            "REPLACE INTO purchase_orders(id,supplier_id,sku_id,qty,eta_days,status) "
+            "VALUES(%s,%s,%s,%s,%s,%s)",
+            PURCHASE_ORDERS,
+        )
+        cur.executemany(
+            "REPLACE INTO batch_po(batch_id,po_id) VALUES(%s,%s)", BATCH_PO
+        )
     conn.close()
     print(f"[mysql] warehouses={len(WAREHOUSES)} skus={len(SKUS)} "
           f"inventory={len(INVENTORY)} batches={len(BATCHES)} shipments={len(SHIPMENTS)} "
-          f"orders={len(ORDERS)}")
+          f"orders={len(ORDERS)} customers={len(CUSTOMERS)} suppliers={len(SUPPLIERS)} "
+          f"po={len(PURCHASE_ORDERS)}")
 
 
 # ---------------------------------------------------------------- Neo4j
@@ -166,7 +186,8 @@ def seed_neo4j(onto: dict) -> None:
     )
     with driver.session() as s:
         s.run("MATCH (n) WHERE n:Warehouse OR n:SKU OR n:Batch OR n:Shipment "
-              "OR n:Doc OR n:Rule OR n:Ontology OR n:Order DETACH DELETE n")
+              "OR n:Doc OR n:Rule OR n:Ontology OR n:Order OR n:Customer "
+              "OR n:Supplier OR n:PurchaseOrder DETACH DELETE n")
 
         s.run("CREATE (:Ontology {version: $v, path: $p})",
               v=str(onto.get("version")), p=str(ONTOLOGY_PATH.name))
@@ -178,6 +199,24 @@ def seed_neo4j(onto: dict) -> None:
         for sid, name, cat in SKUS:
             s.run("CREATE (:SKU {id:$id, name:$name, category:$cat})", id=sid, name=name, cat=cat)
 
+        for cid, cname, tier, region in CUSTOMERS:
+            s.run("CREATE (:Customer {id:$id, name:$name, tier:$tier, region:$region})",
+                  id=cid, name=cname, tier=tier, region=region)
+
+        for sid, sname, region, tier in SUPPLIERS:
+            s.run("CREATE (:Supplier {id:$id, name:$name, region:$region, tier:$tier})",
+                  id=sid, name=sname, region=region, tier=tier)
+
+        for pid, sup, sku, qty, eta, status in PURCHASE_ORDERS:
+            s.run(
+                "MATCH (sp:Supplier {id:$sup}), (k:SKU {id:$sku}) "
+                "CREATE (po:PurchaseOrder {id:$id, qty:$qty, eta_days:$eta, status:$st}) "
+                "MERGE (po)-[:PLACED_WITH]->(sp) MERGE (po)-[:CONTAINS]->(k)",
+                id=pid, sup=sup, sku=sku, qty=qty, eta=eta, st=status,
+            )
+            s.run("MATCH (sp:Supplier {id:$sup}), (k:SKU {id:$sku}) "
+                  "MERGE (sp)-[:SUPPLIES]->(k)", sup=sup, sku=sku)
+
         for bid, sku, wid, qty, exp, cleared in BATCHES:
             s.run(
                 "MATCH (wh:Warehouse {id:$wid}) "
@@ -187,6 +226,11 @@ def seed_neo4j(onto: dict) -> None:
             )
             s.run("MATCH (b:Batch {id:$b}), (k:SKU {id:$s}) MERGE (k)-[:HAS_BATCH]->(b)",
                   b=bid, s=sku)
+
+        # 批次 → 采购单：供应商链路的关键一跳
+        for bid, po in BATCH_PO:
+            s.run("MATCH (b:Batch {id:$b}), (po:PurchaseOrder {id:$p}) "
+                  "MERGE (b)-[:FROM_PO]->(po)", b=bid, p=po)
 
         for tid, sku, wid, batch, qty, eta, carrier in SHIPMENTS:
             s.run(
@@ -210,12 +254,12 @@ def seed_neo4j(onto: dict) -> None:
                   then=rule.get("then", ""), enabled=bool(rule.get("enabled", True)))
             s.run("MATCH (o:Ontology), (r:Rule {id:$id}) MERGE (o)-[:HAS_RULE]->(r)", id=rule["id"])
 
-        # 订单与物料的归属关系，让 Order 这个本体概念在库里真的存在
+        # 订单 → 物料 → 客户，让 Order / Customer 在库里都能被多跳问到
         for oid, customer, sku, qty, due, otype in ORDERS:
             s.run(
-                "MATCH (k:SKU {id:$sku}) "
+                "MATCH (k:SKU {id:$sku}), (c:Customer {id:$c}) "
                 "CREATE (o:Order {id:$id, customer:$c, qty:$qty, due_days:$due, type:$t}) "
-                "MERGE (o)-[:ORDERED_FOR]->(k)",
+                "MERGE (o)-[:ORDERED_FOR]->(k) MERGE (o)-[:TO_CUSTOMER]->(c)",
                 id=oid, c=customer, sku=sku, qty=qty, due=due, t=otype,
             )
 
@@ -231,7 +275,8 @@ def seed_neo4j(onto: dict) -> None:
                       d=doc_id, r=rid)
 
         counts = {}
-        for label in ["Warehouse", "SKU", "Batch", "Shipment", "Rule", "Doc", "Order"]:
+        for label in ["Warehouse", "SKU", "Batch", "Shipment", "Rule", "Doc", "Order",
+                      "Customer", "Supplier", "PurchaseOrder"]:
             counts[label] = s.run(f"MATCH (n:{label}) RETURN count(n) AS c").single()["c"]
     driver.close()
     print(f"[neo4j] {counts}")
@@ -446,6 +491,33 @@ def validate(onto: dict) -> list[str]:
             errors.append(f"订单 {o['id']} 类型非法：{o['type']}")
         if not o.get("customer"):
             errors.append(f"订单 {o['id']} 没有客户")
+
+    # 客户 / 供应商 / 采购单：图上的多跳链要靠这些引用成立
+    cust_ids = {c["id"] for c in _ds.CUSTOMERS}
+    sup_ids = {s["id"] for s in _ds.SUPPLIERS}
+    po_ids = {p["id"] for p in _ds.PURCHASE_ORDERS}
+    dup(_ds.CUSTOMERS, "id", "customers")
+    dup(_ds.SUPPLIERS, "id", "suppliers")
+    dup(_ds.PURCHASE_ORDERS, "id", "purchase_orders")
+
+    for o in _ds.ORDERS:
+        if o["customer"] not in cust_ids:
+            errors.append(f"订单 {o['id']} 的客户不在客户表里：{o['customer']}")
+
+    for p in _ds.PURCHASE_ORDERS:
+        if p["supplier_id"] not in sup_ids:
+            errors.append(f"采购单 {p['id']} 的供应商不存在：{p['supplier_id']}")
+        if p["sku_id"] not in sku_ids:
+            errors.append(f"采购单 {p['id']} 的物料不存在：{p['sku_id']}")
+        if p["qty"] <= 0:
+            errors.append(f"采购单 {p['id']} 数量非法：{p['qty']}")
+
+    for b in _ds.BATCHES:
+        po = b.get("po_id")
+        if not po:
+            errors.append(f"批次 {b['id']} 没有关联采购单")
+        elif po not in po_ids:
+            errors.append(f"批次 {b['id']} 关联的采购单不存在：{po}")
 
     # 文档：DOC_RULES 的键必须和目录里的 md 一一对应，引用的规则必须存在
     doc_files = {p.stem for p in (ROOT / "data" / "docs").glob("*.md")}

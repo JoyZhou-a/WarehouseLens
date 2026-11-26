@@ -27,6 +27,12 @@ DEMO_QUESTIONS = [
      "hint": "扣留数量与在途延误的归因"},
     {"id": "Q3", "text": "新合同允许保税仓批次提前承诺，这条规则生效会影响什么",
      "hint": "改本体，行为变化"},
+    {"id": "Q4", "text": "如果临期线收紧到 20 天，会影响哪些客户订单",
+     "hint": "影响面：规则→批次→物料→订单→客户，4 跳（只有图能一趟走完）"},
+    {"id": "Q5", "text": "供应商 S-2201 的批次流向了哪些客户",
+     "hint": "供应商链路：采购单→批次→物料→订单→客户，5 跳"},
+    {"id": "Q6", "text": "这周哪些货要发？",
+     "hint": "列表枚举，RAG 完全答不了"},
 ]
 
 
@@ -78,13 +84,17 @@ def demo() -> list[dict]:
     return DEMO_QUESTIONS
 
 
+MODES = ("system", "system_nograph", "pipeline", "baseline", "rag_data", "rag_data_graph",
+         "nl2sql")
+
+
 @app.post("/api/ask")
 def ask_api(body: AskBody) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题为空")
-    if body.mode not in ("system", "pipeline", "baseline"):
-        raise HTTPException(status_code=400, detail="mode 只能是 system、pipeline 或 baseline")
+    if body.mode not in MODES:
+        raise HTTPException(status_code=400, detail=f"mode 只能是 {'、'.join(MODES)}")
     return ask(question, body.mode, body.session_id)
 
 
@@ -94,8 +104,8 @@ def ask_async(body: AskAsyncBody) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题为空")
-    if body.mode not in ("system", "pipeline", "baseline"):
-        raise HTTPException(status_code=400, detail="mode 只能是 system、pipeline 或 baseline")
+    if body.mode not in MODES:
+        raise HTTPException(status_code=400, detail=f"mode 只能是 {'、'.join(MODES)}")
     task_id = new_task()
 
     def worker() -> None:

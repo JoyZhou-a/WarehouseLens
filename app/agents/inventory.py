@@ -128,6 +128,10 @@ def run(onto: Ontology, parsed: dict) -> dict:
     total = sum(w["promiseable"] for w in direct)
     counted_supply = sum(s["qty"] for s in supply if s["countable"])
 
+    # 调拨源排序：先看时效（近的优先），再看可承诺量。
+    # 否则扩仓之后「成都 365 台」会排在「合肥 90 台」前面，调拨变成 3 天到货。
+    transfer_sources.sort(key=lambda w: (LEAD_TIME.get(w["warehouse_id"], 2),
+                                         -w["promiseable"]))
     need = demand - total
     transfers = []
     for w in transfer_sources:

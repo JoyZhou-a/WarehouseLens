@@ -49,10 +49,17 @@ def ask(question: str, mode: str = "system", session_id: str | None = None,
 
     if mode == "baseline":
         _run_baseline(st, question, onto)
+    elif mode in ("rag_data", "rag_data_graph"):
+        st["parsed"] = planner.parse(question)
+        _run_baseline_data(st, question, onto, with_graph=(mode == "rag_data_graph"))
+    elif mode == "nl2sql":
+        _run_nl2sql(st, question, onto)
     elif mode == "pipeline":
         _run_system(st, question, onto)
+    elif mode == "system_nograph":
+        _run_multi(st, question, onto, with_graph=False)
     else:
-        _run_multi(st, question, onto)
+        _run_multi(st, question, onto, with_graph=True)
 
     st["elapsed_ms"] = int((time.time() - started) * 1000)
     st["trace"] = state_tool.events(task_id)
@@ -114,7 +121,7 @@ def _clarify(parsed: dict) -> str | None:
     例外：归因类和规则类问题本质是「解释发生了什么」，允许沿用演示物料的默认值，
     但会在 parsed 里标记 assumed，答案里也会写清是哪个物料。
     """
-    if parsed["intent"] in ("lookup", "shortage"):
+    if parsed["intent"] in ("lookup", "supplier"):
         return None
     missing = []
     if not parsed.get("sku_id"):
@@ -177,7 +184,7 @@ def _main_plan(question: str, parsed: dict,
     return tasks, "llm", verdict.get("intent"), slots
 
 
-def _run_multi(st: dict, question: str, onto) -> None:
+def _run_multi(st: dict, question: str, onto, with_graph: bool = True) -> None:
     """主 agent：抽参数 → 澄清或派发 → 子 agent 并行取证 → 组装 → 独立校验。"""
     from .agents.workers import run_worker
 
@@ -196,6 +203,11 @@ def _run_multi(st: dict, question: str, onto) -> None:
         parsed["classified_by"] = "llm"
         if llm_intent == "lookup":
             parsed["lookup_kind"] = planner._lookup_kind(question)
+        st["parsed"] = parsed
+
+    # 问题里点名了供应商，就必须走供应商链路，不能被模型判成列表题
+    if parsed.get("supplier_id"):
+        parsed["intent"] = "supplier"
         st["parsed"] = parsed
 
     # 记忆补槽：只在问题本身没给参数时填，不覆盖用户明说的值
@@ -251,11 +263,17 @@ def _run_multi(st: dict, question: str, onto) -> None:
             {"level": "info", "code": "CLARIFY", "msg": "缺少关键参数，先向用户确认"}]}
         return
 
-    # 主 agent 有时会为了省事只派一个子 agent；承诺/归因/规则类问题必须有文档依据，
+    # 主 agent 有时会为了省事只派一个子 agent；承诺/归因类必须有文档依据，
     # 规则类还必须看图里的治理关系，这里做确定性补齐（不是替代模型决策，是下限）。
+    if not with_graph:
+        tasks = [t for t in tasks if t["agent"] != "graph"]
     wanted = {t["agent"] for t in tasks}
-    for need in ([] if parsed["intent"] == "lookup"
-                 else ["doc"] + (["inventory", "graph"] if parsed["intent"] == "rule_change" else [])):
+    need_more = [] if parsed["intent"] == "lookup" else ["doc"]
+    if parsed["intent"] == "rule_change":
+        need_more.append("inventory")
+        if with_graph:
+            need_more.append("graph")
+    for need in need_more:
         if need not in wanted:
             tasks.append({"agent": need, "goal": f"补齐：{need} 取证"})
             wanted.add(need)
@@ -294,6 +312,28 @@ def _run_multi(st: dict, question: str, onto) -> None:
         st["facts"][name] = res.get("result")
     st["evidence"] = (st["facts"].get("doc") or {}).get("hits") or []
 
+    # 列表类问题必须有确定性兜底：子 agent 有时会选错工具（例如调了 compute_promise），
+    # 那样 facts 里没有 rows，编排层就会把「没取到」误报成「没有记录」。
+    if parsed["intent"] == "lookup":
+        payload = st["facts"].get("inventory") or {}
+        if not payload.get("rows"):
+            from .tools import ops
+
+            kind = parsed.get("lookup_kind") or "orders"
+            window = parsed.get("window_days") or 7
+            t0 = time.time()
+            if kind == "shipments":
+                payload = ops.list_due_shipments(window)
+            elif kind == "batches":
+                payload = ops.list_expiring_batches(window)
+            else:
+                payload = ops.list_orders(window)
+            st["facts"]["inventory"] = payload
+            state_tool.trace(task_id, "main", "force_lookup",
+                             {"kind": kind, "window": window}, True,
+                             {"rows": len(payload.get("rows") or [])},
+                             int((time.time() - t0) * 1000))
+
     # 规则变更类问题：基线与「关掉规则后」两组数由编排层确定性算，
     # 不依赖子 agent 恰好调对 simulate / compute_promise（它可能只调了其中一个）。
     if parsed["intent"] == "rule_change":
@@ -306,8 +346,30 @@ def _run_multi(st: dict, question: str, onto) -> None:
                              {"rule": parsed["target_rule"]}, True, st["rule_impact"],
                              int((time.time() - t0) * 1000))
 
+    # 影响面也由编排层确定性算：阈值和时间窗从问题里解析，模型只负责表述。
+    # 否则「20 天」这种参数由模型自己填，同一问题每次答案的订单数都不一样。
+    if parsed["intent"] == "rule_change" and any(
+            k in question for k in ("影响", "哪些客户", "哪些订单", "波及")):
+        t0 = time.time()
+        from .tools import ops
+
+        impact = ops.impact_of_rule(
+            rule_id=parsed.get("target_rule") or "R1",
+            within_days=parsed.get("window_days") or 14,
+            expiry_threshold=parsed.get("expiry_threshold") or 30,
+        )
+        st["facts"].setdefault("graph", {})["impact_of_rule"] = impact
+        state_tool.trace(task_id, "main", "impact_scope",
+                         {"rule": impact["rule"], "threshold": parsed.get("expiry_threshold"),
+                          "window": impact["window_days"]}, True,
+                         {"batches": impact["batch_count"], "orders": impact["order_count"],
+                          "customers": impact["customer_count"]},
+                         int((time.time() - t0) * 1000))
+
     if parsed["intent"] == "lookup":
         st["answer"] = _compose_lookup(st, onto)
+    elif parsed["intent"] == "supplier":
+        st["answer"] = _compose_supplier(st, onto)
     else:
         st["answer"] = _compose(st, onto)
 
@@ -317,6 +379,23 @@ def _run_multi(st: dict, question: str, onto) -> None:
                      {"passed": verdict["passed"], "issues": len(verdict["issues"])},
                      int((time.time() - t0) * 1000))
     st["verification"] = verdict
+
+
+def _compose_supplier(st: dict, onto) -> str:
+    """供应商链路：条目由 Neo4j 多跳取出，脚本只做排版。"""
+    trace = ((st.get("facts") or {}).get("graph") or {}).get("supplier_trace") or {}
+    if not trace or not trace.get("po_count"):
+        return "没有查到该供应商的采购单链路（可能是供应商号不存在，或图里还没建它的采购单）。"
+    lines = [f"供应商 {trace['supplier']}：{trace['po_count']} 张采购单，覆盖 "
+             f"{len(trace.get('skus') or [])} 个物料、{len(trace.get('orders') or [])} 张订单、"
+             f"{trace['customer_count']} 个客户。"]
+    for po in (trace.get("purchase_orders") or [])[:8]:
+        lines.append(f"- {po['po']}｜{po['sku']}｜{po['qty']} 台｜{po['status']}")
+    if trace.get("customers"):
+        lines.append("涉及客户：" + "、".join(trace["customers"][:10]))
+    lines.append(f"（来源：Neo4j 5 跳 供应商→采购单→批次→物料→订单→客户；"
+                 f"口径 ontology {st['ontology_version']}）")
+    return "\n".join(lines)
 
 
 def _compose_lookup(st: dict, onto) -> str:
@@ -452,11 +531,28 @@ def _rule_impact(onto, parsed: dict) -> dict:
     original = next((r for r in onto.rules if r["id"] == rule_id), None)
     if not original:
         return {"rule": rule_id, "found": False}
-    original["enabled"] = False
-    try:
-        after = inv_agent.run(onto, parsed)
-    finally:
-        original["enabled"] = True
+
+    # 两种 what-if：
+    # 1) 给了阈值（「收紧到 20 天」）→ 规则仍生效，只改阈值；
+    # 2) 没给阈值（「这条规则生效会怎样」）→ 直接关掉规则。
+    threshold = parsed.get("expiry_threshold")
+    if threshold and rule_id == "R1":
+        when = original.setdefault("when", {})
+        previous_lt = when.get("expiry_days_lt")
+        when["expiry_days_lt"] = int(threshold)
+        try:
+            after = inv_agent.run(onto, parsed)
+        finally:
+            if previous_lt is not None:
+                when["expiry_days_lt"] = previous_lt
+            else:
+                when.pop("expiry_days_lt", None)
+    else:
+        original["enabled"] = False
+        try:
+            after = inv_agent.run(onto, parsed)
+        finally:
+            original["enabled"] = True
 
     delta = after["total_promiseable"] - before["total_promiseable"]
     return {
@@ -568,6 +664,30 @@ def _facts_for_llm(st: dict) -> dict:
             {"文件": g["doc"], "关系": g["rel"], "规则": g["rule"], "规则名": g.get("label")}
             for g in governance
         ]
+    impact = graph.get("impact_of_rule")
+    if impact:
+        facts["规则影响面"] = {
+            "规则": impact["rule"], "时间窗": impact["window_days"],
+            "命中批次": impact["batch_count"], "涉及物料": len(impact.get("skus") or []),
+            "受影响订单": impact["order_count"], "受影响客户": impact["customer_count"],
+            "相关订单合计台": impact["order_qty"],
+            "样例订单": impact.get("orders", [])[:5],
+        }
+    supplier = graph.get("supplier_trace")
+    if supplier:
+        facts["供应商链路"] = {
+            "供应商": supplier["supplier"], "采购单数": supplier["po_count"],
+            "物料": (supplier.get("skus") or [])[:10],
+            "订单数": len(supplier.get("orders") or []),
+            "客户数": supplier["customer_count"],
+            "客户": (supplier.get("customers") or [])[:10],
+        }
+    coverage = graph.get("substitute_coverage")
+    if coverage:
+        facts["替代覆盖"] = {
+            "物料": coverage["sku"], "替代目标": coverage.get("targets", [])[:5],
+            "合计可承诺": coverage["total_promiseable"],
+        }
     return facts
 
 
@@ -596,11 +716,30 @@ def _compose_with_llm(st: dict, onto, intent: str) -> str | None:
     hist = _history_text(st.get("history"))
     answer = llm.chat(COMPOSE_SYSTEM,
                       f"最近对话：{hist}\n\n问题：{question}\n\n事实：\n{json.dumps(facts, ensure_ascii=False)}",
-                      temperature=0.3, max_tokens=600)
+                      temperature=0.3, max_tokens=1500)
     if not answer:
         return None
 
     lines = [answer.strip()]
+    graph = (st.get("facts") or {}).get("graph") or {}
+    impact = graph.get("impact_of_rule")
+    if impact:
+        lines.append(
+            f"影响面（Neo4j 4 跳：规则→批次→物料→订单→客户）：规则 {impact['rule']} 命中 "
+            f"{impact['batch_count']} 个批次，涉及 {len(impact.get('skus') or [])} 个物料、"
+            f"{impact['order_count']} 张订单、{impact['customer_count']} 个客户，"
+            f"相关订单合计 {impact['order_qty']} 台。")
+    supplier = graph.get("supplier_trace")
+    if supplier and supplier.get("po_count"):
+        lines.append(
+            f"供应商链路（Neo4j 5 跳：供应商→采购单→批次→物料→订单→客户）：{supplier['supplier']} 有 "
+            f"{supplier['po_count']} 张采购单、{len(supplier.get('skus') or [])} 个物料、"
+            f"{len(supplier.get('orders') or [])} 张订单、{supplier['customer_count']} 个客户。")
+    coverage = graph.get("substitute_coverage")
+    if coverage and coverage.get("targets"):
+        lines.append(
+            f"替代覆盖（Neo4j 变长路径）：{coverage['sku']} 沿替代链可覆盖 "
+            f"{len(coverage['targets'])} 个物料，合计可承诺 {coverage['total_promiseable']} 台。")
     if intent == "rule_change":
         prov = _rule_provenance_line(st)
         if prov:
@@ -752,9 +891,275 @@ def _run_baseline(st: dict, question: str, onto) -> None:
     if llm.available():
         rewritten = llm.chat(BASELINE_SYSTEM,
                              f"问题：{question}\n\n检索到的片段：\n{snippets}",
-                             temperature=0.2, max_tokens=900)
+                             temperature=0.2, max_tokens=2600)
         if rewritten:
             answer = rewritten
     st["answer"] = answer
     st["verification"] = {"passed": True, "issues": [
         {"level": "info", "code": "BASELINE", "msg": "基线模式不做数量校验，它拿不到数量"}]}
+
+
+NL2SQL_SYSTEM = """你是资深数据分析师。根据给出的 MySQL 表结构，写一条 SELECT 查询来回答问题。
+
+要求：
+1. 只输出 JSON：{"sql": "..."}，不要任何解释。
+2. 只能写一条 SELECT，不要写 INSERT/UPDATE/DELETE。
+3. 表名、列名必须来自给的结构，不确定就不查那一列。
+4. 需要 JOIN 就用明确的连接键；注意别让 join 产生重复计数。"""
+
+NL2SQL_ANSWER_SYSTEM = """你是供应链计划经理。下面给你问题、实际执行的 SQL、以及查询结果。
+
+请基于查询结果给结论：
+1. 只使用结果里的数字，不要编造。
+2. 如果 SQL 报错或结果为空，直接说明失败原因，不要猜答案。
+3. 用 4-6 句话说清：结论、关键数字、缺口或影响面。
+4. 不要复述 SQL。"""
+
+
+def _run_nl2sql(st: dict, question: str, onto) -> None:
+    """NL2SQL 对照臂：模型自己写 SQL、自己读数、自己算。"""
+    from .tools import nl2sql
+
+    task_id = st["task_id"]
+    if not st.get("parsed"):
+        st["parsed"] = planner.parse(question)
+
+    t0 = time.time()
+    schema = nl2sql.schema_text()
+    state_tool.trace(task_id, "main", "load_schema", {}, bool(schema),
+                     {"tables": schema.count("\n") + 1}, int((time.time() - t0) * 1000))
+
+    gen = llm.chat_json(NL2SQL_SYSTEM, f"表结构：\n{schema}\n\n问题：{question}",
+                        max_tokens=1400) or {}
+    sql = (gen.get("sql") or "").strip()
+    t0 = time.time()
+    result = nl2sql.execute(sql) if sql else {"ok": False, "error": "模型没给出 SQL"}
+    state_tool.trace(task_id, "main", "run_sql", {"sql": sql[:400]}, bool(result.get("ok")),
+                     {"rows": result.get("count", 0), "error": result.get("error", "")[:160]},
+                     int((time.time() - t0) * 1000))
+
+    st["facts"] = {"sql": {"sql": result.get("sql") or sql, "ok": result.get("ok"),
+                           "rows": (result.get("rows") or [])[:40],
+                           "error": result.get("error")}}
+    answer = "（模型没有返回正文）"
+    if llm.available():
+        written = llm.chat(
+            NL2SQL_ANSWER_SYSTEM,
+            f"问题：{question}\n\nSQL：{result.get('sql') or sql}\n\n"
+            f"结果（{result.get('count', 0)} 行）："
+            f"{json.dumps(result.get('rows') or [], ensure_ascii=False, default=str)[:4000]}\n\n"
+            f"错误：{result.get('error') or '无'}",
+            temperature=0.2, max_tokens=1500)
+        if written:
+            answer = written
+    st["answer"] = answer
+    st["verification"] = {"passed": True, "issues": [
+        {"level": "info", "code": "NL2SQL",
+         "msg": "NL2SQL 臂：没有 ontology 执行层，SQL 由模型生成，结果只做了行数限制"}]}
+
+
+# ------------------------------------------------------------ 强基线（同等数据）
+
+BASELINE_DATA_SYSTEM = """你是供应链计划经理。下面同时给你：口径与规则、仓库原始数据、检索到的规范片段。
+
+请严格按给出的公式和规则，自己逐仓计算，给出结论。
+
+要求：
+1. 只能使用给出的数据，不得编造数字、批次、仓库。
+2. 必须给出：各仓可用量、可承诺量、合计、缺口、能否承诺。
+3. 说明被哪条规则挡住（用规则编号），以及还缺什么数据。
+4. 用 5-8 句话说清，不要列表格，不要复述原始数据。"""
+
+
+def _ontology_text(onto) -> str:
+    """把 ontology 的公式和规则渲染成人话，注入强基线的提示词。
+
+    这样强基线和系统路径拿到的是同一套口径与规则，差别只剩「谁来执行」。
+    """
+    lines = ["口径公式："]
+    for name, m in onto.metrics.items():
+        lines.append(f"- {m.get('label', name)} = {m['formula']}")
+    lines.append("")
+    lines.append("业务规则（按条件判断，命中即生效）：")
+    for r in onto.rules:
+        conds = []
+        for key, val in (r.get("when") or {}).items():
+            if key.endswith("_lt"):
+                conds.append(f"{key[:-3]} < {val}")
+            else:
+                conds.append(f"{key} = {val}")
+        state = "启用" if r.get("enabled", True) else "停用"
+        lines.append(f"- {r['id']} {r.get('label', '')}：当 {' 且 '.join(conds)} 时 → {r.get('then')}（{state}）")
+    notes = [
+        "说明：可承诺合计 = 主供仓（可承诺量最大的仓）+ 保税仓（未被规则排除时）；",
+        "其他成品仓只作调拨源，不计入合计；被规则排除的仓可承诺为 0。",
+    ]
+    return "\n".join(lines + [""] + notes)
+
+
+from decimal import Decimal
+
+
+def _jsonable(obj):
+    """MySQL 会返回 Decimal / date，直接进 state 会让 json.dumps 炸。"""
+    if isinstance(obj, dict):
+        return {k: _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return obj
+
+
+def _baseline_data_context(parsed: dict) -> dict:
+    """给强基线喂和系统路径同样口径的原始数据，但不给公式和规则引擎。"""
+    from .tools import ops
+
+    ctx: dict = {"物料": parsed.get("sku_id")}
+    sku = parsed.get("sku_id")
+    if not sku:
+        # 没有点名物料（例如「收紧到 20 天会影响哪些客户订单」）：
+        # 给「近效期批次 + 时间窗内订单 + 客户主数据」这个切片。
+        # 这是检索式做法能给到的上限——剩下的连接和聚合仍要模型自己做。
+        from .tools import dataset as ds
+
+        threshold = parsed.get("expiry_threshold") or 30
+        ctx.pop("物料")
+        ctx["近效期批次"] = ops.list_expiring_batches(max(threshold + 30, 60))["rows"]
+        ctx["时间窗内订单"] = ops.list_orders(14)["rows"]
+        ctx["客户"] = [{"id": c["id"], "tier": c["tier"], "region": c["region"]}
+                     for c in ds.CUSTOMERS]
+        return _jsonable(ctx)
+    if parsed.get("intent") == "lookup":
+        kind = parsed.get("lookup_kind") or "orders"
+        window = parsed.get("window_days") or 7
+        if kind == "orders":
+            ctx["订单"] = ops.list_orders(window)["rows"]
+        elif kind == "shipments":
+            ctx["在途"] = ops.list_due_shipments(window)["rows"]
+        else:
+            ctx["批次"] = ops.list_expiring_batches(window)["rows"]
+        return _jsonable(ctx)
+
+    ctx["库存"] = [
+        {"仓库": r["warehouse_id"], "类型": r["warehouse_type"], "在库": r["on_hand"],
+         "已分配": r["allocated"], "预留": r["reserved"], "扣留": r["hold_qty"],
+         "已到在途": r["in_transit_arrived"], "安全库存": r["safety_stock"]}
+        for r in ops.get_inventory(sku)["rows"]
+    ]
+    ctx["批次"] = [
+        {"批次": b["id"], "仓库": b["warehouse_id"], "数量": b["qty"],
+         "剩余效期": b["expiry_days"], "已清关": bool(b["cleared"])}
+        for b in ops.get_batches(sku)["rows"]
+    ]
+    ctx["在途"] = [
+        {"单号": s["id"], "仓库": s["warehouse_id"], "批次": s["batch_id"],
+         "数量": s["qty"], "ETA天": s["eta_days"], "批次效期": s["expiry_days"]}
+        for s in ops.get_shipments(sku)["rows"]
+    ]
+    return _jsonable(ctx)
+
+
+def _graph_text(parsed: dict) -> str:
+    """把图谱关系渲染成文本，供「无 ontology 但有图谱」这一格使用。"""
+    from .tools import ops
+
+    sku = parsed.get("sku_id")
+    if not sku:
+        return ""
+    lines = ["关系（来自知识图谱）："]
+    try:
+        subs = ops.get_substitutes(sku, max_hops=3)["rows"]
+        if subs and isinstance(subs[0], dict) and "path" in subs[0]:
+            lines.append("- 替代链：" + "；".join(
+                " → ".join(p["path"]) + f"（{p['hops']} 跳）" for p in subs))
+        else:
+            one = ops.get_substitutes(sku, max_hops=1)["rows"]
+            for s in one:
+                batches = "、".join(f"{b['warehouse']} {b['qty']} 台" for b in (s.get("stock") or []))
+                lines.append(f"- {s['from_sku']} 可替代为 {s['to_name']}（限制：{s.get('restriction')}），"
+                             f"可调批次：{batches}")
+    except Exception:
+        pass
+    gov = []
+    for rid in ("R1", "R2", "R3", "R4"):
+        try:
+            rows = ops.get_rule_sources(rid)["rows"]
+        except Exception:
+            continue
+        for r in rows:
+            rel = "覆盖（OVERRIDES）" if r["rel"] == "OVERRIDES" else "规定（GOVERNS）"
+            gov.append(f"- {r['doc']} {rel} {rid}")
+    if gov:
+        lines.append("- 规则出处：")
+        lines.extend(dict.fromkeys(gov))
+    return "\n".join(lines)
+
+
+def _run_baseline_data(st: dict, question: str, onto, with_graph: bool = False) -> None:
+    """强基线：同等数据 + 同等检索，但口径判断和算术都交给模型。
+
+    这是公平对比用的那条路径：数据不让它吃亏，差的是「谁负责算」。
+    """
+    task_id = st["task_id"]
+    parsed = st.get("parsed") or {}
+
+    t0 = time.time()
+    hits = doc_tool.search(f"{question} 可用量 可承诺量 规则", top_k=4)
+    backend = hits[0]["backend"] if hits else doc_tool.backend()
+    state_tool.trace(task_id, "doc", "vector_search", {"query": question}, True,
+                     {"hits": len(hits), "backend": backend},
+                     int((time.time() - t0) * 1000))
+    st["evidence"] = hits
+
+    t0 = time.time()
+    data = _baseline_data_context(parsed)
+    state_tool.trace(task_id, "main", "load_data", {"sku": parsed.get("sku_id")}, True,
+                     {"rows": {k: len(v) for k, v in data.items() if isinstance(v, list)}},
+                     int((time.time() - t0) * 1000))
+    st["facts"] = {"data": data}
+
+    docs = "\n\n".join(f"【{h['doc_id']} 第 {h['chunk_no'] + 1} 段】{h['text']}" for h in hits)
+    onto_text = _ontology_text(onto)
+    graph_text = _graph_text(parsed) if with_graph else ""
+    state_tool.trace(task_id, "main", "inject_context",
+                     {"ontology": True, "graph": with_graph}, True,
+                     {"onto_len": len(onto_text), "graph_len": len(graph_text)}, 0)
+    answer = ""
+    if llm.available():
+        written = llm.chat(
+            BASELINE_DATA_SYSTEM,
+            f"问题：{question}\n\n口径与规则（ontology）：\n{onto_text}\n\n"
+            + (f"{graph_text}\n\n" if graph_text else "")
+            + f"仓库原始数据：\n{json.dumps(data, ensure_ascii=False)}\n\n"
+            f"规范片段：\n{docs}",
+            temperature=0.2, max_tokens=2600)
+        if written and written.strip():
+            answer = written
+        else:
+            # 推理模型可能把预算全花在 reasoning 上。换一个「只给结论」的压缩 prompt 再试一次。
+            compact = {k: v for k, v in data.items() if k in ("物料", "库存")}
+            compact["批次数"] = len(data.get("批次") or [])
+            compact["在途数"] = len(data.get("在途") or [])
+            retry = llm.chat(
+                "只输出结论和关键数字，不要解释推理过程，不要列表格。",
+                f"问题：{question}\n\n规则要点：\n{onto_text}\n\n"
+                f"数据摘要：{json.dumps(compact, ensure_ascii=False)}\n\n"
+                f"明细（截断）：{json.dumps(data, ensure_ascii=False)[:6000]}",
+                temperature=0.2, max_tokens=1600)
+            if retry and retry.strip():
+                answer = retry
+            else:
+                meta = llm.LAST_META
+                answer = (
+                    "（模型输出为空：这次调用的 "
+                    f"{meta.get('completion_tokens') or '全部'} 个 token 都用于推理，"
+                    "正文被 max_tokens 截断。这是推理模型的已知限制，不是数据缺失；"
+                    "重试一次通常能出正文，也可以换成非推理模型对比。）"
+                )
+    st["answer"] = answer
+    st["verification"] = {"passed": True, "issues": [
+        {"level": "info", "code": "RAG_DATA",
+         "msg": "强基线：数据与检索同系统路径，但由模型自己判断口径并计算"}]}

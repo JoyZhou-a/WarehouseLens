@@ -1,0 +1,142 @@
+[
+ {
+  "cell": "① 强基线（无ont·无图）",
+  "mode": "rag_data",
+  "case": "Q1 承诺",
+  "ok_rate": 0.5,
+  "ms": 49155
+ },
+ {
+  "cell": "① 强基线（无ont·无图）",
+  "mode": "rag_data",
+  "case": "Q3 规则影响",
+  "ok_rate": 0.0,
+  "ms": 0
+ },
+ {
+  "cell": "① 强基线（无ont·无图）",
+  "mode": "rag_data",
+  "case": "Q5 列表",
+  "ok_rate": 0.0,
+  "ms": 0
+ },
+ {
+  "cell": "① 强基线（无ont·无图）",
+  "mode": "rag_data",
+  "case": "Q7 影响面（多跳）",
+  "ok_rate": 0.0,
+  "ms": 0
+ },
+ {
+  "cell": "② 强基线（无ont·有图）",
+  "mode": "rag_data_graph",
+  "case": "Q1 承诺",
+  "ok_rate": 0.5,
+  "ms": 42704
+ },
+ {
+  "cell": "② 强基线（无ont·有图）",
+  "mode": "rag_data_graph",
+  "case": "Q3 规则影响",
+  "ok_rate": 0.0,
+  "ms": 0
+ },
+ {
+  "cell": "② 强基线（无ont·有图）",
+  "mode": "rag_data_graph",
+  "case": "Q5 列表",
+  "ok_rate": 0.0,
+  "ms": 0
+ },
+ {
+  "cell": "② 强基线（无ont·有图）",
+  "mode": "rag_data_graph",
+  "case": "Q7 影响面（多跳）",
+  "ok_rate": 0.0,
+  "ms": 0
+ },
+ {
+  "cell": "③ 多agent（有ont·无图）",
+  "mode": "system_nograph",
+  "case": "Q1 承诺",
+  "ok_rate": 1.0,
+  "ms": 9555
+ },
+ {
+  "cell": "③ 多agent（有ont·无图）",
+  "mode": "system_nograph",
+  "case": "Q3 规则影响",
+  "ok_rate": 1.0,
+  "ms": 16635
+ },
+ {
+  "cell": "③ 多agent（有ont·无图）",
+  "mode": "system_nograph",
+  "case": "Q5 列表",
+  "ok_rate": 0.0,
+  "ms": 5657
+ },
+ {
+  "cell": "③ 多agent（有ont·无图）",
+  "mode": "system_nograph",
+  "case": "Q7 影响面（多跳）",
+  "ok_rate": 1.0,
+  "ms": 16627
+ },
+ {
+  "cell": "④ 系统（有ont·有图）",
+  "mode": "system",
+  "case": "Q1 承诺",
+  "ok_rate": 1.0,
+  "ms": 14731
+ },
+ {
+  "cell": "④ 系统（有ont·有图）",
+  "mode": "system",
+  "case": "Q3 规则影响",
+  "ok_rate": 1.0,
+  "ms": 16534
+ },
+ {
+  "cell": "④ 系统（有ont·有图）",
+  "mode": "system",
+  "case": "Q5 列表",
+  "ok_rate": 0.0,
+  "ms": 8593
+ },
+ {
+  "cell": "④ 系统（有ont·有图）",
+  "mode": "system",
+  "case": "Q7 影响面（多跳）",
+  "ok_rate": 1.0,
+  "ms": 20222
+ },
+ {
+  "cell": "⑤ NL2SQL（手写 SQL）",
+  "mode": "nl2sql",
+  "case": "Q1 承诺",
+  "ok_rate": 0.0,
+  "ms": 34081
+ },
+ {
+  "cell": "⑤ NL2SQL（手写 SQL）",
+  "mode": "nl2sql",
+  "case": "Q3 规则影响",
+  "ok_rate": 0.0,
+  "ms": 25371
+ },
+ {
+  "cell": "⑤ NL2SQL（手写 SQL）",
+  "mode": "nl2sql",
+  "case": "Q5 列表",
+  "ok_rate": 0.0,
+  "ms": 21129
+ },
+ {
+  "cell": "⑤ NL2SQL（手写 SQL）",
+  "mode": "nl2sql",
+  "case": "Q7 影响面（多跳）",
+  "ok_rate": 0.0,
+  "ms": 36262
+ }
+]

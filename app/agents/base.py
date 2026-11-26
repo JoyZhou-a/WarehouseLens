@@ -22,8 +22,8 @@ from .. import llm
 
 MAX_STEPS = 2
 MAX_OBS_CHARS = 700
-DECISION_TOKENS = 600
-FORCE_TOKENS = 900
+DECISION_TOKENS = 1200
+FORCE_TOKENS = 1500
 FORCE_FINISH = ("工具调用已到上限，不能再调工具。现在只能输出："
                 '{"thought":"基于已有观测的结论",'
                 '"action":"finish","final":{ ... }}')
