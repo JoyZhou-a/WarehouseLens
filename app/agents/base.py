@@ -137,6 +137,10 @@ class ReActAgent:
 
         for step_no in range(1, self.max_steps + 1):
             t0 = time.time()
+            # 最后一步还在调工具就会以「步数用尽」收场，看起来像仓促结束；
+            # 提前提醒模型用已有观测直接收尾，绝大多数情况下能自然 finish。
+            if step_no == self.max_steps and observations:
+                transcript.append("这是最后一步：已有足够的观测数据，请直接 action=finish 给出结论，不要再调用工具。")
             decision = llm.chat_json(system, "\n".join(transcript), max_tokens=DECISION_TOKENS)
             if not decision:
                 # 模型偶尔会吐散文，提醒一次再试，别急着退回确定性路径

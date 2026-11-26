@@ -1,168 +1,251 @@
-# WMS 仓储归因助手
+# WarehouseLens
 
-面向仓储场景的多 agent 问答系统，用来回答「这单能不能承诺」「为什么缺货」「这条规则生效后影响什么」。
-对比基线是纯 RAG：向量检索命中文档后直接交给模型回答。
+**把仓储口径做成可执行的本体，用主 agent + 子 agent 编排取出可审计的答案。**
 
-## 技术构成
+这个项目要回答的是仓库日常真的会问、但 RAG 答不好的四类问题：
 
-| 组件 | 作用 | 在哪里 |
-|---|---|---|
-| ontology | 定义类、关系、指标口径、业务规则 | `ontology/wms.yaml` |
-| MySQL | 库存、批次、在途等明细 | 容器 wms-mysql |
-| Neo4j | 物料、批次、仓库、在途、规则的关系 | 容器 wms-neo4j |
-| Milvus | 文档片段的向量 | 容器 wms-milvus |
-| Redis | agent 共享状态与 trace | 容器 wms-redis |
-| FastAPI | 后端与前端页面 | `app/` |
-
-## 云上实测（117.72.15.179）
-
-四个库已经在云上跑着，本地 `.env` 指过去就能用。实测结果：
-
-| 库 | 版本 | 实测内容 | 十次连接（最小/平均/最大） |
-|---|---|---|---|
-| MySQL | 8.0.46 | 7 张表，库存 30 行 / 批次 40 / 在途 10 / 订单 20 | 39 / 85 / 136 ms |
-| Neo4j | 5.20.0 | 106 节点 / 144 关系 | 37 / 62 / 102 ms |
-| Redis | 7.4.12 | PING 通，state 与 trace 落这里 | 37 / 53 / 94 ms |
-| Milvus | v2.4.9 | 2 个 collection（bge 1024 维 / hash 512 维），各 49 条向量 | 35 / 61 / 102 ms |
-
-一键复验（只读，不写数据）：
-
-```bash
-python scripts/netcheck.py      # 每端口连 10 次 + 四个协议握手
-python scripts/check_deps.py    # 四库体检 + 数据条数
-python scripts/smoke_demo.py    # 跑三个演示问题，断言数字与数据源（需先起服务）
-python scripts/seed.py --check  # 数据自检：引用完整性、数量对得上、文档与规则对得上
-```
-
-四个脚本的退出码在全部通过时才为 0，可以直接用在彩排脚本里。`seed.py` 每次写库前都会自动跑一遍自检，数据不自洽就拒绝写入。
-
-### 库掉线时会发生什么
-
-工具层内置本地数据集，真库不可用时退回本地并继续出结果，但**降级不是静默的**：降级时终端会打印原因，轨迹里每步都标 `backend`（`mysql` / `neo4j` / `milvus` / `local`），20 秒冷却后自动重试真库。`smoke_demo.py` 会断言三个数据源必须分别是 `mysql`、`neo4j`、`milvus`，防止演示时其实在读本地常量。
-
-## 本机直接跑
-
-数据库在云上，本机不需要 Docker：
-
-```bash
-copy .env.example .env      # 四个 host 改成 117.72.15.179（本仓库已有 .env）
-python scripts/seed.py      # 首次或要重置数据时执行，可 --only mysql 单库灌
-python run.py               # 打开 http://127.0.0.1:8000
-```
-
-### 接大模型
-
-`.env` 里三项，key 建议走系统环境变量或服务器上的 `EnvironmentFile`，不要写进仓库：
-
-```
-LLM_MODE=live
-LLM_API_KEY=sk-...
-LLM_MODEL=deepseek-flash
-LLM_REVIEW=off          # 模型复核默认关闭；打开会每题多 7-10 秒
-```
-
-`LLM_MODE=replay` 完全不调 API，答案走确定性模板，断网也能演示。live 模式下每题多 1-2 次调用，耗时约 6-8 秒；模型调用失败会自动退回模板，不会让请求失败。
-
-### 向量化：bge-m3 与本地哈希双路
-
-```
-EMBED_PROVIDER=bge                       # bge 走租的接口，hash 走本地字符哈希
-EMBED_API_KEY=sk-...                     # 硅基流动的 key，BAAI/bge-m3 不计费
-EMBED_MODEL=BAAI/bge-m3
-EMBED_DIM_BGE=1024
-RERANK_ENABLED=off                       # 23 个片段用不上重排，见 docs/agent-design.md
-```
-
-两个 provider 各占一个 collection（`wms_docs_bge` 1024 维、`wms_docs_hash` 512 维），因为维度不同不能混查。bge 不可用时整条链自动切到 hash，页面 `backend` 会显示 `milvus/bge` 或 `milvus/hash`。换 provider 后要重灌向量：`python scripts/seed.py --only milvus`。
-
-演示入口支持深链，现场不用手打问题：
-
-- `/?q=Q1` 直接跑 Q1，`&cmp=1` 加上 RAG 并排对比
-- `/?q=Q3&cmp=1` 跑规则变更
-- `/?q=Q2&onto=1` 顺带展开本体面板
-
-## 本地启动（自己起数据库时用）
-
-```bash
-# 1. 环境
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-
-# 2. 配置
-copy .env.example .env
-
-# 3. 起数据库（首次拉镜像会慢）
-docker compose up -d mysql neo4j redis etcd minio milvus
-
-# 4. 等健康检查通过
-docker compose ps
-
-# 5. 灌数据
-python scripts/seed.py
-
-# 6. 只灌某一个库
-python scripts/seed.py --only mysql
-```
-
-## 端口
-
-| 服务 | 端口 |
+| 问题 | 靠什么回答 |
 |---|---|
-| MySQL | 3306 |
-| Neo4j Browser | 7474 |
-| Neo4j Bolt | 7687 |
-| Redis | 6379 |
-| Milvus | 19530 |
-| 应用 | 8000 |
+| 客户 C-2024-017 下周一要 500 台 NB-X1C-14，能承诺吗 | 本体公式算可用量，规则判临期/保税，代码算缺口与调拨 |
+| 如果临期线收紧到 20 天，会影响哪些客户订单 | 规则→批次→物料→订单→客户，4 跳图查询 |
+| 供应商 S-2201 的批次流向了哪些客户 | 供应商→采购单→批次→物料→订单→客户，5 跳 |
+| 这周哪些货要发？ | 结构化查询 + 逐条枚举（向量检索做不到） |
 
-## 依赖体检
+不是「给文档加个向量库」，而是三件事的组合：**本体（口径）→ 编排（谁来算）→ 校验（算得对不对）**。
 
-四个库起来没有、起来后有没有数据，一个页面看完。这两个入口用的是同一份检查逻辑（`app/deps.py`）：
+---
+
+## 60 秒看懂
 
 ```bash
-python scripts/check_deps.py          # 命令行版，全部通过时退出码才为 0
-python run.py                         # 然后打开 http://127.0.0.1:8000/health
+python run.py                 # http://127.0.0.1:8000 ，账号见 .env
 ```
 
-页面每 5 秒自动刷新一次，除了红绿灯，还显示每个库的实际地址、耗时和具体报错，方便判断是「连不上」还是「连上了但没建表／没灌数据」。检查是并发跑的，四个全挂也是 3 秒内出结果。
+界面分三栏：
 
-常见两种黄灯：
+- **左**：会话列表（追问能接上文）
+- **中**：对话 + 每个回答内联「执行过程」——谁在干活、调了什么工具、耗时多少
+- **右**：本次运行的编排图（主 agent 派发到哪个子 agent，谁在发光）、各角色耗时、校验结论
 
-- MySQL 显示「连上了，但库里没有表」→ `python scripts/check_deps.py --init-schema`
-- Neo4j 显示「图里没有节点」→ `python scripts/seed.py --only neo4j`
+顶部还有「仓储看板」：库存总量与可用量、分仓占用率、临期批次、在途与待发订单——可用量走的是同一套本体公式，和问答不会出现两个口径。
 
-## 上云
+打开「对比模式」可以把同一道题并排跑两种路径：左边多 agent 编排 **11 秒**给出 420 台，右边强基线 **50 秒**算出 365（把 R1 用在了在库而不是在途批次上）。
 
-数据库跑在云上，本地通过公网 IP 调用。
+架构图见 [`shots/architecture.png`](shots/architecture.png)。
 
-1. 云服务器装 Docker：`curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun`，再 `systemctl enable --now docker`。
-2. 把仓库 clone 到云上，`cp .env.example .env`，改掉默认密码。
-3. `docker compose up -d`，等 `docker compose ps` 全部 healthy。
-4. 安全组放开 3306、7474、7687、6379、19530。
-5. 本地 `.env` 把四个 host 改成云服务器公网 IP，然后 `python scripts/seed.py` 灌数据（数据写进云上的库）。
-6. 打开 `http://<公网IP>:8000/health`，四个都绿就通了。
+---
 
-注意：这些端口直接暴露公网等于裸奔，演示期用完就关掉安全组。正式做法是只开 8000，让应用在云内网访问数据库。另外 `.env` 被 git 忽略了，云上那份要单独建。
+## 一、本体层：口径不是提示词，是代码执行的文件
 
-## 目录
+`ontology/wms.yaml` 定义 6 个类、5 种关系、2 个指标公式、4 条规则。指标是**可求值的表达式**，不是自然语言：
+
+```yaml
+metrics:
+  - name: available_inventory
+    formula: on_hand - allocated - reserved - hold_qty + in_transit_arrived
+  - name: promiseable_qty
+    formula: max(0, available_inventory - safety_stock)
+rules:
+  - id: R1
+    label: 临期批次不参与新单承诺
+    when: {order_type: new_order, expiry_days_lt: 30}
+    then: exclude_batch
+  - id: R3
+    label: 保税仓批次默认不可提前承诺
+    when: {warehouse_type: bonded}
+    then: exclude_warehouse
+```
+
+执行链：`app/ontology.py` 用 AST 安全求值公式 → `app/agents/inventory.py` 逐仓套公式、逐条判规则 → 命中 `exclude_batch` 的批次不进可用量，命中 `exclude_warehouse` 的仓可承诺记 0。
+
+**这一点决定了项目的上限**：
+
+- 数字只有一个来源，同一问题问十次都是 420，因为算的是公式；
+- 改规则不用改代码——界面上关掉 R3，文件被改写，再问就变成 480；
+- 答案脚注打印口径原文，评审可以核。
+
+> R1 的作用对象是**在途批次**（TR-88213 的 80 台），不是上海仓的在库 500 台。这个语义写在代码里；只拿到「数据 + 规则文本」的模型区分不出来，这正是消融里强基线算成 365 的原因。
+
+---
+
+## 二、编排层：LLM 只在两个位置决策
 
 ```
-app/            后端与前端
-  agents/       六个 agent 的实现
-  tools/        工具层，访问四个数据源
-  orchestrator  编排与校验
-ontology/       本体定义
-db/mysql/       建表语句
-data/docs/      虚拟文档，供 Milvus 检索
-scripts/seed.py 数据生成
-docs/           设计说明
+用户提问
+  → planner：规则抽 SKU/数量/时间窗，LLM 复判意图（commit / shortage / rule_change / lookup / supplier）
+  → 记忆与澄清：Redis 会话槽位补全，缺参数就反问
+  → 主 agent（LLM）：决定派谁、给每个子 agent 一句目标
+  → 并行子 agent ×3（ReAct，最多 3 步，每次自己选工具）
+  → 编排层确定性动作：补齐证据、规则前后对比、影响面按解析阈值重算
+  → 组装：模板给结构，LLM 只做表述
+  → verifier：确定性四项检查
+  → Redis 落状态 + SSE 逐条推给前端
 ```
 
-## 演示问题
-
-| 编号 | 问题 | 看什么 |
+| 角色 | 负责 | 为什么不能交换 |
 |---|---|---|
-| Q1 | 客户 C-2024-017 下周一要 500 台 NB-X1C-14，能承诺吗 | 可用量口径、临期批次被规则挡掉、跨仓调拨 |
-| Q2 | 上周合肥仓 14 寸机型缺货率为什么上升 | 数值归因加文档证据 |
-| Q3 | 新合同允许保税仓提前承诺，这条生效后影响什么 | 改 ontology，行为变化 |
+| 主 agent（LLM） | 派哪几个子 agent、目标是什么 | 不同问题需要不同取证组合，写死就退化成流水线 |
+| 子 agent（LLM） | 在自己的工具清单里选哪个、传什么参数 | 同样是查库存，「算承诺」和「查扣留」用的工具不同 |
+| 编排层（代码） | 补下限、算影响面、组装、校验 | 这些必须可复现，不能交给模型 |
+
+**子 agent 的工具集**（共 22 个领域工具）：
+
+- 库存子 agent：`compute_promise`、`simulate`、`get_inventory`、`get_batches`、`get_shipments`、`list_*`
+- 图谱子 agent：`impact_of_rule`（4 跳）、`supplier_trace`（5 跳）、`substitute_coverage`（变长）、`get_rule_sources`
+- 文档子 agent：`search_docs`（Milvus 语义检索）、`read_doc`
+
+**ReAct 协议**：每步输出 `{"thought","action":"call|finish","tool","args"}`；步数用尽时先用已有观测作答，再不行退回确定性实现；每次决策、每次工具调用都写进 trace，前端据此画图与展示过程。
+
+**幻觉的三道闸**：工具返回数字而不是文本；答案模板结构固定；verifier 独立重算并做数字溯源。
+
+---
+
+## 三、校验层：pass/fail 只由确定性检查决定
+
+`app/agents/verifier.py` 做四件事：
+
+1. 按口径独立重算可承诺合计（主供仓 + 保税仓），与 agent 给的总数比对；
+2. 规则挡掉的仓/批次是否真的被排除；
+3. 调拨量是否超过缺口（防重复计算）；
+4. 答案里的数字能否在中间结果里找到来源。
+
+校验器先判断载荷形状：承诺类问题没有分仓明细直接判 fail；归因类问题只做「证据 + 数字溯源」。模型复核（`LLM_REVIEW`）默认关闭——它慢、且会按自己的口径误判，只作为参考信息。
+
+---
+
+## 四、知识图谱：什么时候它才不可替代
+
+Neo4j 里 **1298 个节点 / 3196 条关系**：
+
+```
+Supplier -PLACED_WITH<- PurchaseOrder -FROM_PO<- Batch -STORED_IN-> Warehouse
+PurchaseOrder -CONTAINS-> SKU <-ORDERED_FOR- Order -TO_CUSTOMER-> Customer
+SKU -SUBSTITUTE_OF{restriction}-> SKU
+Doc -GOVERNS-> Rule <-OVERRIDES- Doc
+```
+
+**诚实说明**：1–2 跳的查询用 MySQL 外键就够了，图没有优势（我们测过差异为 0）。图的独立价值只出现在「跳数不固定 + 实体异构」的问题上：
+
+- 规则收紧会影响哪些客户订单（规则→批次→物料→订单→客户）
+- 供应商的批次流向了哪些客户（5 跳；SQL 要 5 表 join，且容易扇出重复）
+- 替代链 1–3 跳能覆盖多少未交付需求
+
+图的另一层用处是**溯源**：每条规则出自哪份文件、被哪份合同覆盖——这类关系在关系库里没有对应表。
+
+同时要承认：Rule 节点是 `wms.yaml` 的 seed 快照，规则开关不会自动同步到图。图在这里是**派生视图**，口径的唯一来源始终是 YAML。
+
+---
+
+## 五、和「强化 RAG」的对照实验
+
+`scripts/ablation.py` 跑五条臂，题库四道（承诺 / 规则影响 / 列表 / 影响面）：
+
+| 臂 | Q1 承诺 | Q3 规则影响 | Q5 列表 | Q7 影响面 | 总正确率 | 平均耗时 |
+|---|---|---|---|---|---|---|
+| ① 强基线：规则+数据全给模型 | 1/2 | 0/2 | 0/2 | 0/2 | 12% | 34s |
+| ② 强基线 + 图谱关系文本 | 1/2 | 0/2 | 0/2 | 0/2 | 12% | 34s |
+| ③ 多 agent（本体执行，无图谱） | 2/2 | 2/2 | 2/2 | 2/2 | 100% | 12s |
+| ④ 完整系统 | 2/2 | 2/2 | 2/2 | 2/2 | 100% | 15s |
+| ⑤ NL2SQL（模型自己写 SQL） | 0/2 | 0/2 | 0/2 | 0/2 | 0% | 29s |
+
+三条结论：
+
+1. **信息相同、只差「谁算」，就是 12% 对 100%，而且慢 2–3 倍。** 强基线把 R1 作用在在库上算成 365；系统按在途批次算得到 420。
+2. **无 SKU 的全局问题，强基线连数据都组不出来**——取数本身需要一个查询计划。
+3. **NL2SQL 全错不是因为不会写 SQL，是口径不在库里**：公式和阈值在 YAML 里，数据库只有原始列，模型只能硬编码或漏掉。
+
+细节与测量缺陷见 [`docs/ablation.md`](docs/ablation.md)。
+
+---
+
+## 六、数据与存储分工
+
+| 存储 | 存什么 | 规模 |
+|---|---|---|
+| MySQL 8.0 | 事实：库存、批次、在途、订单、客户、供应商、采购单 | 389 库存格 / 761 批次 / 200 订单 / 11 张表 |
+| Neo4j 5.20 | 关系与治理 | 1298 节点 / 3196 关系 |
+| Milvus 2.4.9 | 文档向量（12 份 SOP/合同/邮件，49 段） | bge-m3 1024 维 |
+| Redis 7.4 | 会话、任务快照、编排轨迹 | 会话 24h / 任务 1h |
+| `ontology/wms.yaml` | 口径与规则 | 唯一来源 |
+
+---
+
+## 七、技术栈
+
+| 层 | 技术 |
+|---|---|
+| 交互 | 原生 JavaScript（无框架）、EventSource / SSE、CSS 动画 |
+| 接口 | FastAPI 0.165、uvicorn；同步 `/api/ask`、异步 `/api/ask/async`、`/api/events/{id}` |
+| 编排 | 自研 orchestrator（约 1200 行）+ ReAct 运行时 + 线程池并行派发 |
+| 工具 | 22 个领域工具，统一 JSON 返回，全部带 backend 标记 |
+| 存储 | MySQL 8.0 / Neo4j 5.20 / Milvus 2.4.9 / Redis 7.4 |
+| 模型 | DeepSeek `deepseek-flash`（推理模型）、`BAAI/bge-m3`（1024 维，硅基流动） |
+| 登录 | 单管理员，HMAC 签名 cookie，密码放 `/etc/wms/wms.env` |
+| 部署 | systemd + uvicorn，云服务器 `117.72.15.179:8000` |
+
+---
+
+## 八、目录
+
+```
+app/
+  orchestrator.py        编排：规划 → 派发 → 合并 → 组装 → 校验
+  ontology.py            本体：AST 公式求值、规则执行、开关改写
+  auth.py                单管理员登录（HMAC cookie）
+  agents/
+    planner.py           意图与槽位抽取
+    base.py              ReAct 运行时（步数上限、退化、trace）
+    workers.py           三个子 agent 的工具清单与结果归一
+    inventory.py         确定性库存计算（本体口径）
+    verifier.py          确定性校验
+  tools/
+    ops.py               领域工具集
+    graph_tool.py        Neo4j 查询（含降级）
+    mysql_tool.py        MySQL 查询（含降级）
+    doc_tool.py          Milvus 检索（bge / 本地 hash 双 provider）
+    dashboard.py         仓储看板聚合
+    session.py           会话记忆（Redis）
+    state.py             任务快照与轨迹（Redis）
+  static/                index.html / login.html（单文件前端，不打包）
+ontology/wms.yaml        口径与规则（唯一来源）
+data/docs/*.md           12 份 SOP / 合同 / 邮件
+db/mysql/schema.sql      11 张表
+scripts/
+  seed.py                灌库 + 数据自检（--check）
+  smoke_demo.py          上台前自检（含登录）
+  ablation.py            五臂消融实验
+  check_deps.py          依赖体检（--init-schema）
+docs/
+  agent-design.md        编排与图谱设计细节
+  ablation.md            消融结果与测量缺陷
+  DEMO-DATA.md           数据字典
+```
+
+---
+
+## 九、常见追问
+
+**Q：为什么要四个数据库？**
+各解决不同问题：MySQL 存事实，图存路径与溯源，Milvus 存非结构化文本，Redis 存运行态。每个都能一句话说清为什么不用别的替代。
+
+**Q：为什么不用 LangGraph？**
+这个项目的重点是编排判断本身，框架会把它藏起来；而且有几处必须由代码决定（影响面按解析阈值重算、数字可溯源、缺证据补齐），写进图里更绕。手写约 1200 行，延迟与可观测性都可控。如果需求变成「可中断、任意节点恢复、多轮反思」，会换成 LangGraph——那是它的强项。
+
+**Q：主 agent 和子 agent 的区别？**
+主 agent 决定**分工**（派谁、目标），子 agent 决定**取证方式**（选哪个工具、传什么参数）。两者都是 LLM 决策，但决策对象不同；编排层只做保底与计算，不替代它们。
+
+**Q：怎么保证 LLM 不编数字？**
+三层：工具返回结构化数字、答案模板固定结构、verifier 独立重算并做数字溯源。模型只负责组织语言。
+
+**Q：知识图谱是不是多余的？**
+在 1–2 跳的问题上确实多余，我们测过差异为 0。它只在 4–5 跳、异构实体、需要溯源时才有独立价值——所以代码里把它做成「查询能力」，而不是必经路径。
+
+---
+
+## 十、已知边界
+
+- 数据是合成的；规模为演示设计（389 库存格 / 761 批次），不是生产量级。
+- 没有出入库流水表，所以「为什么库存从 500 变成 420」只能解释当前状态，追不到具体事件；预测也缺少历史出库序列。
+- 断点恢复只做到「工具副作用前落盘」，整轮不能从中间续跑。
+- 登录是最小实现：单账号、明文比对环境变量里的密码；真实系统应接 SSO 并哈希存储。
+- 消融每格 2 次，0/50/100 粒度较粗；强基线的部分失败来自推理模型的 token 预算（已加重试），仍属模型相关结论。

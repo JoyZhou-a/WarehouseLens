@@ -345,6 +345,18 @@ def _run_multi(st: dict, question: str, onto, with_graph: bool = True) -> None:
             state_tool.trace(task_id, "main", "compare_rule",
                              {"rule": parsed["target_rule"]}, True, st["rule_impact"],
                              int((time.time() - t0) * 1000))
+            # 规则出处同样由编排层确定性取一次：图 agent 可能把步数花在影响面上，
+            # 而「这条规则出自哪份文件」是答案里必须有的一段，不能靠运气。
+            g = st["facts"].setdefault("graph", {})
+            if not g.get("rule_governance"):
+                from .tools import ops
+
+                t1 = time.time()
+                g["rule_governance"] = ops.get_rule_sources(parsed["target_rule"]).get("rows") or []
+                state_tool.trace(task_id, "main", "rule_sources",
+                                 {"rule": parsed["target_rule"]}, bool(g["rule_governance"]),
+                                 {"rows": len(g["rule_governance"])},
+                                 int((time.time() - t1) * 1000))
 
     # 影响面也由编排层确定性算：阈值和时间窗从问题里解析，模型只负责表述。
     # 否则「20 天」这种参数由模型自己填，同一问题每次答案的订单数都不一样。

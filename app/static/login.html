@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>登录 · WarehouseLens</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--accent:#1f5eff}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);
+  font:14px/1.6 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
+.card{width:360px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 24px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.06)}
+h1{font-size:17px;margin:0 0 4px}
+p.sub{margin:0 0 18px;color:var(--muted);font-size:12.5px}
+label{display:block;font-size:12.5px;color:var(--muted);margin:12px 0 6px}
+input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;font:inherit;outline:none}
+input:focus{border-color:#b9c9ff;box-shadow:0 0 0 3px #eef3ff}
+button{width:100%;margin-top:18px;padding:9px;border:0;border-radius:9px;background:var(--accent);
+  color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+.err{margin-top:12px;font-size:12.5px;color:#b42318;background:#fdecea;border-radius:8px;padding:8px 10px;
+  display:none}
+.hint{margin-top:16px;font-size:11.5px;color:var(--muted);border-top:1px dashed var(--line);padding-top:12px}
+</style>
+</head>
+<body>
+<form class="card" id="form">
+  <h1>WarehouseLens</h1>
+  <p class="sub">仓储归因助手 · 演示环境</p>
+  <label for="u">管理员账号</label>
+  <input id="u" autocomplete="username" autofocus />
+  <label for="p">密码</label>
+  <input id="p" type="password" autocomplete="current-password" />
+  <button id="btn" type="submit">登录</button>
+  <div class="err" id="err"></div>
+  <div class="hint">演示账号在服务器 <code>/etc/wms/wms.env</code> 里配置（ADMIN_USER / ADMIN_PASSWORD），仓库中不含真实密码。</div>
+</form>
+<script>
+const $ = (s) => document.querySelector(s);
+$("#form").onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = $("#btn"), err = $("#err");
+  btn.disabled = true; btn.textContent = "登录中…"; err.style.display = "none";
+  try {
+    const r = await fetch("/api/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: $("#u").value, password: $("#p").value}),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || `登录失败（${r.status}）`);
+    }
+    location.href = "/";
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.display = "block";
+    btn.disabled = false; btn.textContent = "登录";
+  }
+};
+</script>
+</body>
+</html>

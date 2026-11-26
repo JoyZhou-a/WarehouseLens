@@ -58,7 +58,19 @@ def check(state: dict) -> dict:
                        "msg": "没有库存计算结果，无法支撑任何数量结论"})
         return {"passed": False, "issues": issues}
 
-    whs = inv.get("warehouses", [])
+    # 只有「承诺口径计算」的载荷才有分仓与合计；归因类问题子 agent 往往只取原始行。
+    # 拿原始行去做合计校验会重算出 0 并报假错，所以先判形状，再决定校验哪几项。
+    whs = inv.get("warehouses") or []
+    promise_like = bool(whs) and inv.get("total_promiseable") is not None
+    if not promise_like:
+        if intent in ("commit", "rule_change"):
+            issues.append({"level": "error", "code": "NO_PROMISE_CALC",
+                           "msg": "承诺/规则类问题没有可承诺口径计算结果（缺分仓或合计）"})
+            return {"passed": False, "issues": issues}
+        issues.append({"level": "info", "code": "NO_PROMISE_CALC",
+                       "msg": "本问没有做承诺口径计算，跳过合计 / 规则 / 调拨三项校验"})
+        return {"passed": True, "issues": issues + _content_checks(state, inv)}
+
     ranked = sorted(whs, key=lambda w: w["promiseable"], reverse=True)
     primary = next((w for w in ranked if w["promiseable"] > 0), None)
 
@@ -90,23 +102,7 @@ def check(state: dict) -> dict:
         issues.append({"level": "error", "code": "TRANSFER_OVER_GAP",
                        "msg": f"调拨量 {moved} 超过缺口 {gap}，存在重复计算"})
 
-    if not state.get("evidence") and state.get("parsed", {}).get("intent") in ("commit", "rule_change"):
-        issues.append({"level": "warn", "code": "NO_EVIDENCE",
-                       "msg": "结论没有文档依据"})
-
-    answer = state.get("answer") or ""
-    if answer:
-        known: set[float] = set()
-        texts: list[str] = []
-        _collect(inv, known, texts)
-        _collect(state.get("rule_impact") or {}, known, texts)
-        _collect(state.get("evidence") or [], known, texts)
-        mentioned = {float(n) for n in NUMBER_RE.findall(answer)}
-        stray = {n for n in mentioned
-                 if n > 100 and not any(abs(n - k) < 1e-6 for k in known)}
-        if stray:
-            issues.append({"level": "warn", "code": "NUMBER_NOT_TRACED",
-                           "msg": f"答案里这些数字在中间结果里找不到来源：{sorted(stray)}"})
+    issues.extend(_content_checks(state, inv))
 
     llm_note = _llm_review(state)
     if llm_note:
@@ -115,6 +111,30 @@ def check(state: dict) -> dict:
 
     passed = not any(i["level"] == "error" for i in issues)
     return {"passed": passed, "issues": issues}
+
+
+def _content_checks(state: dict, inv: dict) -> list[dict]:
+    """与口径无关的两项：有没有文档依据、答案里的数字能不能追到中间结果。"""
+    issues: list[dict] = []
+    intent = (state.get("parsed") or {}).get("intent")
+    if not state.get("evidence") and intent in ("commit", "rule_change"):
+        issues.append({"level": "warn", "code": "NO_EVIDENCE", "msg": "结论没有文档依据"})
+
+    answer = state.get("answer") or ""
+    if answer:
+        known: set[float] = set()
+        texts: list[str] = []
+        _collect(inv, known, texts)
+        _collect(state.get("rule_impact") or {}, known, texts)
+        _collect(state.get("evidence") or [], known, texts)
+        _collect((state.get("facts") or {}).get("graph") or {}, known, texts)
+        mentioned = {float(n) for n in NUMBER_RE.findall(answer)}
+        stray = {n for n in mentioned
+                 if n > 100 and not any(abs(n - k) < 1e-6 for k in known)}
+        if stray:
+            issues.append({"level": "warn", "code": "NUMBER_NOT_TRACED",
+                           "msg": f"答案里这些数字在中间结果里找不到来源：{sorted(stray)}"})
+    return issues
 
 
 def _llm_review(state: dict) -> str | None:

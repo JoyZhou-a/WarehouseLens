@@ -6,19 +6,37 @@ import json
 import threading
 import time
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import config, deps, llm
+from . import auth, config, deps, llm
 from .ontology import get_ontology
 from .orchestrator import ask, new_task
+from .tools import dashboard
 from .tools import doc_tool, graph_tool, mysql_tool
 from .tools import session as session_tool
 from .tools import state as state_tool
 
 app = FastAPI(title="WMS 仓储归因助手", version="0.1")
 STATIC = config.ROOT / "app" / "static"
+
+# 不需要登录就能访问的路径：登录页本身、健康检查（给监控和脚本用）
+PUBLIC_PATHS = {"/login", "/api/login", "/api/health", "/api/deps", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS:
+        return await call_next(request)
+    user = auth.verify(request.cookies.get(auth.COOKIE))
+    if not user:
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "未登录或登录已过期"}, status_code=401)
+        return RedirectResponse("/login", status_code=307)
+    request.state.user = user
+    return await call_next(request)
 
 DEMO_QUESTIONS = [
     {"id": "Q1", "text": "客户 C-2024-017 下周一要 500 台 NB-X1C-14，能承诺吗",
@@ -48,6 +66,47 @@ class AskAsyncBody(AskBody):
 
 class RuleBody(BaseModel):
     enabled: bool
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/login")
+def login_page() -> FileResponse:
+    return FileResponse(STATIC / "login.html")
+
+
+@app.post("/api/login")
+def login(body: LoginBody) -> JSONResponse:
+    if not auth.check_password(body.username, body.password):
+        # 不区分「用户不存在」和「密码错」，避免枚举账号
+        raise HTTPException(status_code=401, detail="账号或密码不正确")
+    token = auth.issue(body.username.strip())
+    resp = JSONResponse({"ok": True, "user": body.username.strip()})
+    resp.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax",
+                    max_age=config.AUTH_TTL, path="/")
+    return resp
+
+
+@app.post("/api/logout")
+def logout() -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE, path="/")
+    return resp
+
+
+@app.get("/api/me")
+def me(request: Request) -> dict:
+    user = auth.verify(request.cookies.get(auth.COOKIE)) or {}
+    return {"user": user.get("u"), "expires_at": user.get("exp")}
+
+
+@app.get("/api/dashboard")
+def dashboard_snapshot() -> dict:
+    """仓储看板：库存总量、风险项、分仓占用、临期/在途/待发。"""
+    return dashboard.snapshot()
 
 
 @app.get("/")

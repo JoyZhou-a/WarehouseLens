@@ -8,33 +8,38 @@
 :root{
   --bg:#f6f7f9; --card:#fff; --line:#e5e7eb; --text:#111827; --muted:#6b7280;
   --accent:#1f5eff; --accent-soft:#eef3ff; --ok:#12805c; --ok-soft:#e7f6ef;
-  --err:#b42318; --err-soft:#fdecea; --warn:#8a5a00;
+  --err:#b42318; --err-soft:#fdecea; --warn:#d97706;
 }
 *{box-sizing:border-box}
+html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--text);
   font:14px/1.55 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
-header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--card);
+header{display:flex;align-items:center;gap:10px;padding:10px 18px;background:var(--card);
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:9}
 header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
 header .spacer{flex:1}
+.tabs{display:flex;gap:2px;background:#f3f4f6;border-radius:9px;padding:2px}
+.tabs button{border:0;background:transparent;padding:5px 12px;border-radius:7px;font-size:12.5px;
+  color:var(--muted);cursor:pointer}
+.tabs button.on{background:#fff;color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.08)}
 .badge{font-size:11.5px;padding:3px 8px;border-radius:999px;background:#f3f4f6;color:var(--muted);
   border:1px solid var(--line);white-space:nowrap}
 .badge.on{background:var(--ok-soft);color:var(--ok);border-color:#bde7d4}
 .badge.off{background:var(--err-soft);color:var(--err);border-color:#f3c9c4}
 
-.shell{display:grid;grid-template-columns:240px minmax(420px,1fr) 360px;gap:14px;padding:14px;
-  height:calc(100vh - 57px)}
+.shell{display:grid;grid-template-columns:236px minmax(0,1fr) 380px;gap:12px;padding:12px;
+  height:calc(100vh - 53px)}
+body.compare .shell{grid-template-columns:236px minmax(0,1fr)}
+body.compare #run{display:none}
 aside,section{min-height:0}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;display:flex;
+  flex-direction:column;overflow:hidden}
 .card-h{display:flex;align-items:center;justify-content:space-between;gap:8px;
-  padding:10px 12px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+  padding:9px 12px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
 .small{font-size:12px}.muted{color:var(--muted)}
 .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;background:#f3f4f6}
-.pill.sys{background:var(--accent-soft);color:var(--accent)}
-.pill.base{background:#f3f4f6;color:var(--muted)}
 
-/* 左：会话 */
-#sessions{display:flex;flex-direction:column;gap:10px}
+/* 左侧会话 */
 #session-list{overflow:auto;display:flex;flex-direction:column;gap:4px;padding:8px}
 .sess{padding:8px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
 .sess:hover{background:#f9fafb}
@@ -43,58 +48,133 @@ aside,section{min-height:0}
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .sess .m{font-size:11px;color:var(--muted);margin-top:2px}
 
-/* 中：对话 */
-#chat{display:flex;flex-direction:column;gap:0;overflow:hidden}
-#thread{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
-.msg{display:flex;gap:10px;max-width:100%}
-.msg .who{font-size:11px;color:var(--muted);width:44px;flex:0 0 44px;padding-top:3px}
+/* 中间：双栏对比 */
+#panes{flex:1;min-height:0;display:grid;grid-template-columns:1fr;gap:12px;padding:12px 12px 0}
+body.compare #panes{grid-template-columns:1fr 1fr}
+.pane{display:flex;flex-direction:column;min-height:0;border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;background:#fcfcfd}
+.pane-h{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);
+  background:#fff}
+.pane-h .t{font-weight:600;font-size:12.5px}
+.pane-h .spacer{flex:1}
+.pane-h select{border:1px solid var(--line);border-radius:7px;padding:4px 6px;font:inherit;font-size:12px;
+  background:#fff;max-width:210px}
+.thread{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+
+/* 消息 */
+.msg{display:flex;gap:10px}
+.msg .who{font-size:11px;color:var(--muted);width:40px;flex:0 0 40px;padding-top:4px}
 .bubble{background:#f9fafb;border:1px solid var(--line);border-radius:12px;padding:10px 12px;
-  max-width:min(760px,100%);white-space:pre-wrap;word-break:break-word}
+  max-width:min(720px,100%);white-space:pre-wrap;word-break:break-word;font-size:13.5px}
 .msg.user .bubble{background:var(--accent-soft);border-color:#cfdcff}
-.bubble table{margin-top:8px;width:100%;border-collapse:collapse;font-size:12px}
-.bubble th,.bubble td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
-.bubble td.num{text-align:right;font-variant-numeric:tabular-nums}
-.composer{border-top:1px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:8px}
-#q{width:100%;min-height:60px;resize:vertical;border:1px solid var(--line);border-radius:10px;
-  padding:10px;font:inherit;outline:none}
+.stamp{font-size:11px;color:var(--muted);margin-top:8px}
+
+/* 内联执行过程 */
+.act{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.act .hd{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);cursor:pointer;
+  user-select:none}
+.act .hd b{color:var(--text);font-weight:600}
+.act .lines{max-height:180px;overflow:auto}
+.aline{display:grid;grid-template-columns:14px 90px 1fr auto;gap:6px;font-size:11.5px;
+  color:var(--muted);align-items:baseline}
+.aline .ic{text-align:center}
+.aline .ag{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aline .tl{font-family:ui-monospace,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.aline .ms{font-variant-numeric:tabular-nums}
+.aline.run .ic{color:var(--accent)}
+.aline.run .tl{color:var(--accent)}
+.spinner{display:inline-block;width:9px;height:9px;border:2px solid #cfdcff;
+  border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.caret{display:inline-block;width:6px;height:14px;background:var(--accent);vertical-align:-2px;
+  animation:blink 1s steps(2) infinite;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+
+/* 输入区 */
+.composer{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:8px;
+  background:var(--card)}
+#q{width:100%;min-height:56px;max-height:160px;resize:vertical;border:1px solid var(--line);
+  border-radius:10px;padding:9px 10px;font:inherit;outline:none}
 #q:focus{border-color:#b9c9ff;box-shadow:0 0 0 3px #eef3ff}
-.actions{display:flex;gap:8px;flex-wrap:wrap}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 button{cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:8px;
   padding:6px 12px;font:inherit;font-size:13px}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button:disabled{opacity:.5;cursor:default}
+button.ghost.active{background:var(--accent-soft);border-color:#cfdcff;color:var(--accent)}
 .presets{display:flex;gap:6px;flex-wrap:wrap}
 .preset{font-size:12px;background:#f9fafb;border-radius:8px;padding:5px 8px;cursor:pointer;
   border:1px dashed var(--line)}
 .preset:hover{border-color:#c9d6ff}
 
-/* 右：运行评测 */
-#run{display:flex;flex-direction:column;overflow:hidden}
+/* 右侧：编排流程 + 评测 */
 #run-body{overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.flow{position:relative;height:196px;margin:2px 0 6px}
+.flow svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.node{position:absolute;border:1.5px solid var(--line);border-radius:10px;background:#fff;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  font-size:11.5px;line-height:1.25;color:var(--muted);transition:all .25s ease}
+.node b{font-size:12.5px;color:var(--text);font-weight:600}
+.node.main{left:26%;top:2px;width:48%;height:46px;border-color:#cfdcff;background:var(--accent-soft)}
+.node.sub{top:118px;width:30%;height:56px}
+.node[data-k="inventory"]{left:1%}
+.node[data-k="graph"]{left:35%}
+.node[data-k="doc"]{left:69%}
+.node.active{border-color:var(--accent);background:#fff;color:var(--accent);
+  box-shadow:0 0 0 3px rgba(31,94,255,.12),0 0 20px rgba(31,94,255,.35);
+  animation:breathe 1.5s ease-in-out infinite}
+.node.active b{color:var(--accent)}
+.node.done{border-color:#bde7d4;background:var(--ok-soft);color:var(--ok)}
+.node.done b{color:var(--ok)}
+@keyframes breathe{50%{box-shadow:0 0 0 5px rgba(31,94,255,.08),0 0 26px rgba(31,94,255,.5)}}
+.node .st{font-size:10.5px;opacity:.85}
+.edge{stroke:#d1d5db;stroke-width:1.6;fill:none}
+.edge.on{stroke:var(--accent);stroke-dasharray:6 5;animation:flow 0.7s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-22}}
+.edge.done{stroke:#9fd7bd}
+
 .kv{display:flex;justify-content:space-between;gap:8px;font-size:12.5px}
 .kv b{font-variant-numeric:tabular-nums}
 table.t{width:100%;border-collapse:collapse;font-size:12px}
 table.t th,table.t td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left}
 table.t td.n{text-align:right;font-variant-numeric:tabular-nums}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
-.dot.ok{background:var(--ok)}.dot.bad{background:var(--err)}.dot.run{background:#d97706}
 .box{border-radius:8px;padding:8px 10px;font-size:12px}
 .box.ok{background:var(--ok-soft);color:var(--ok)}
 .box.err{background:var(--err-soft);color:var(--err)}
 .box.info{background:#f9fafb;color:var(--muted)}
-.step{display:grid;grid-template-columns:52px 1fr auto;gap:6px;font-size:11.5px;
+.step{display:grid;grid-template-columns:74px 1fr auto;gap:6px;font-size:11.5px;
   padding:2px 0;border-bottom:1px dashed #f1f2f4}
-.step .ag{font-weight:600}
-.step .tl{color:var(--muted);font-family:ui-monospace,Consolas,monospace;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#live{font-size:12px;color:var(--accent);min-height:16px}
-.spinner{display:inline-block;width:10px;height:10px;border:2px solid #cfdcff;
-  border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;margin-right:6px}
-@keyframes sp{to{transform:rotate(360deg)}}
 .hidden{display:none}
-footer{text-align:center;color:var(--muted);font-size:11.5px;padding:6px}
-@media (max-width:1200px){.shell{grid-template-columns:1fr;height:auto}
-  #sessions{order:3}#run{order:2}#thread{max-height:60vh}}
+/* 仓储看板 */
+.dash{padding:14px;display:grid;gap:12px;height:calc(100vh - 53px);overflow:auto;
+  grid-template-columns:repeat(12,minmax(0,1fr));align-content:start}
+.dash .card{padding:0}
+.kpis{grid-column:span 12;display:grid;gap:10px;grid-template-columns:repeat(4,minmax(0,1fr))}
+.kpi{border:1px solid var(--line);border-radius:12px;background:#fff;padding:12px 14px}
+.kpi .l{font-size:11.5px;color:var(--muted)}
+.kpi .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+.kpi .s{font-size:11px;color:var(--muted);margin-top:2px}
+.kpi.warn{border-color:#f3d3a8;background:#fffbf3}
+.kpi.bad{border-color:#f3c9c4;background:#fdf5f4}
+.panel{grid-column:span 6;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
+.panel.wide{grid-column:span 12}
+.panel-h{padding:10px 12px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px;
+  display:flex;justify-content:space-between;align-items:center}
+.panel-b{padding:10px 12px;font-size:12.5px}
+.bar{height:6px;border-radius:999px;background:#eef1f5;overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:999px}
+.bar i.warn{background:var(--warn)}
+.bar i.bad{background:var(--err)}
+.tag{font-size:10.5px;padding:1px 6px;border-radius:999px;background:#f3f4f6;color:var(--muted)}
+.tag.b{background:#eef3ff;color:var(--accent)}
+.tag.w{background:#fff7e6;color:#8a5a00}
+.tag.r{background:#fdecea;color:var(--err)}
+footer{text-align:center;color:var(--muted);font-size:11.5px;padding:4px}
+@media (max-width:1180px){
+  .shell{grid-template-columns:1fr;height:auto}
+  #sessions{order:3}#run{order:2}#panes{max-height:none}
+}
 </style>
 </head>
 <body>
@@ -103,10 +183,17 @@ footer{text-align:center;color:var(--muted);font-size:11.5px;padding:6px}
   <span class="badge" id="b-onto">ontology</span>
   <span class="badge" id="b-llm">llm</span>
   <span class="spacer"></span>
+  <div class="tabs">
+    <button id="tab-chat" class="on">问答</button>
+    <button id="tab-dash">仓储看板</button>
+  </div>
+  <button id="btn-compare" class="ghost">对比模式</button>
+  <span class="badge" id="b-user">-</span>
+  <button id="btn-logout" style="font-size:12px;padding:4px 10px">退出</button>
   <span class="badge" id="b-db">db</span>
 </header>
 
-<main class="shell">
+<main class="shell" id="view-chat">
   <aside class="card" id="sessions">
     <div class="card-h">会话
       <button id="btn-new" style="font-size:12px;padding:3px 8px">新对话</button>
@@ -115,23 +202,31 @@ footer{text-align:center;color:var(--muted);font-size:11.5px;padding:6px}
   </aside>
 
   <section class="card" id="chat">
-    <div class="card-h">对话 <span class="small muted" id="thread-meta"></span></div>
-    <div id="thread"></div>
+    <div id="panes">
+      <div class="pane" id="pane-a">
+        <div class="pane-h">
+          <span class="t" data-title="a">多 agent 编排</span>
+          <span class="spacer"></span>
+          <select class="mode-sel" data-pane="a"></select>
+        </div>
+        <div class="thread" id="thread-a"></div>
+      </div>
+      <div class="pane hidden" id="pane-b">
+        <div class="pane-h">
+          <span class="t" data-title="b">对比</span>
+          <span class="spacer"></span>
+          <select class="mode-sel" data-pane="b"></select>
+        </div>
+        <div class="thread" id="thread-b"></div>
+      </div>
+    </div>
     <div class="composer">
-      <div id="live"></div>
       <textarea id="q" placeholder="例如：这周哪些货要发？ / 客户 C-2024-017 下周一要 500 台 NB-X1C-14，能承诺吗"></textarea>
       <div class="presets" id="presets"></div>
       <div class="actions">
         <button class="primary" id="btn-send">发送</button>
-        <select id="mode" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit">
-          <option value="system">多 agent 编排</option>
-          <option value="system_nograph">多 agent（无图谱）</option>
-          <option value="rag_data">强基线（数据+规则，模型自己算）</option>
-          <option value="rag_data_graph">强基线 + 图谱</option>
-          <option value="nl2sql">NL2SQL（模型自己写 SQL）</option>
-          <option value="pipeline">固定流水线（对照）</option>
-          <option value="baseline">纯 RAG（只给文档）</option>
-        </select>
+        <span class="small muted" id="hint">Ctrl+Enter 发送 · 数字全部由代码从库里算出</span>
+        <span class="spacer" style="flex:1"></span>
         <button id="btn-onto">本体定义</button>
       </div>
     </div>
@@ -139,30 +234,74 @@ footer{text-align:center;color:var(--muted);font-size:11.5px;padding:6px}
 
   <aside class="card" id="run">
     <div class="card-h">运行评测 <span class="small muted" id="run-meta"></span></div>
-    <div id="run-body"><span class="muted small">还没有执行</span></div>
+    <div id="run-body">
+      <div class="kv"><span>状态</span><b class="muted">等待执行</b></div>
+      ${flowHtml()}
+      <div class="small muted">提问后这里会显示：主 agent 如何派发、哪个子 agent 在干活、每一步耗时与校验结果。</div>
+    </div>
   </aside>
 </main>
+<main class="dash hidden" id="view-dash">
+  <div class="kpis" id="dash-kpis"></div>
+  <div class="panel wide">
+    <div class="panel-h">分仓库存与占用 <span class="small muted" id="dash-wh-meta"></span></div>
+    <div class="panel-b" id="dash-wh"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-h">临期批次 <span class="small muted">剩余效期 30 天内</span></div>
+    <div class="panel-b" id="dash-expiring"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-h">在途与待发 <span class="small muted">最近到仓 / 7 天内交付</span></div>
+    <div class="panel-b" id="dash-flow"></div>
+  </div>
+  <div class="panel wide">
+    <div class="panel-h">库存最多的物料 <span class="small muted">可用 = 按本体口径逐行计算</span></div>
+    <div class="panel-b" id="dash-skus"></div>
+  </div>
+</main>
+
 <footer>数据为合成数据，仅用于演示。数量由代码按本体口径计算，模型只负责组织语言。</footer>
 
+<div class="card hidden" id="onto-card"
+     style="position:fixed;right:16px;bottom:16px;width:430px;max-height:72vh;overflow:auto;z-index:20">
+  <div class="card-h">本体定义 <span class="small muted" id="onto-meta"></span></div>
+  <div id="onto-body" style="padding:10px"></div>
+</div>
+
 <script>
-const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-const fmt = (n) => (n === null || n === undefined) ? "-" : Number(n).toLocaleString("zh-CN");
+const $ = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-const ROLE = {planner:"规划", main:"主 agent", inventory:"库存子 agent", graph:"图谱子 agent",
-              doc:"文档子 agent", verifier:"校验", system:"系统"};
-const MODE_LABEL = {system:"多 agent 编排", system_nograph:"多 agent（无图谱）",
-                    rag_data:"强基线（数据+规则）", rag_data_graph:"强基线+图谱",
-                    nl2sql:"NL2SQL", pipeline:"固定流水线", baseline:"纯 RAG"};
+const ROLE = {planner: "规划", main: "主 agent", inventory: "库存子 agent",
+              graph: "图谱子 agent", doc: "文档子 agent", verifier: "校验", system: "系统"};
+const MODES = [
+  ["system", "多 agent 编排"],
+  ["system_nograph", "多 agent（无图谱）"],
+  ["rag_data", "强基线（数据+规则）"],
+  ["rag_data_graph", "强基线 + 图谱"],
+  ["nl2sql", "NL2SQL（模型写 SQL）"],
+  ["pipeline", "固定流水线"],
+  ["baseline", "纯 RAG（只给文档）"],
+];
+const MODE_LABEL = Object.fromEntries(MODES);
+const INTENT_LABEL = {commit: "承诺判断", shortage: "缺货归因", rule_change: "规则影响",
+                      lookup: "清单查询", supplier: "供应商链路"};
+
 let SESSION = localStorage.getItem("wms_session") || "";
-let CURRENT = null;   // 当前任务状态
-let es = null;
+let COMPARE = false;
+const streams = {};   // pane -> EventSource
 
+/* ---------------- 通用 ---------------- */
 async function api(path, opt) {
   const r = await fetch(path, opt);
+  if (r.status === 401) { location.href = "/login"; throw new Error("未登录"); }
   if (!r.ok) throw new Error((await r.text()).slice(0, 200));
   return r.json();
 }
+function threadOf(pane) { return $(`#thread-${pane}`); }
+function modeOf(pane) { return $(`.mode-sel[data-pane="${pane}"]`).value; }
 
 /* ---------------- 会话 ---------------- */
 async function loadSessions() {
@@ -174,149 +313,190 @@ async function loadSessions() {
       <div class="t">${esc(s.title)}</div>
       <div class="m">${s.count} 条消息</div>
     </div>`).join("");
-  box.querySelectorAll(".sess").forEach((el) => {
-    el.onclick = () => { SESSION = el.dataset.id; localStorage.setItem("wms_session", SESSION);
-      loadSessions(); loadThread(); };
+  $$(".sess", box).forEach((el) => {
+    el.onclick = () => {
+      SESSION = el.dataset.id;
+      localStorage.setItem("wms_session", SESSION);
+      loadSessions(); loadThread("a");
+    };
   });
 }
-
 async function newSession() {
   const r = await api("/api/session", {method: "POST"});
   SESSION = r.session_id;
   localStorage.setItem("wms_session", SESSION);
-  await loadSessions(); await loadThread();
+  await loadSessions();
+  threadOf("a").innerHTML = "";
 }
 
-function bubble(role, content, meta) {
+function msgHtml(role, content, meta) {
   const who = role === "user" ? "你" : "系统";
-  const stamp = meta ? ` <span class="muted small">${meta.elapsed_ms || ""}ms · ${meta.mode || ""}</span>` : "";
+  const stamp = meta
+    ? `<div class="stamp">${meta.elapsed_ms || ""}ms · ${MODE_LABEL[meta.mode] || meta.mode || ""}</div>`
+    : "";
   return `<div class="msg ${role}"><div class="who">${who}</div>
-    <div class="bubble">${content}${stamp}</div></div>`;
+    <div class="bubble">${esc(content)}${stamp}</div></div>`;
 }
 
-async function loadThread() {
-  const t = $("#thread");
+async function loadThread(pane) {
+  const t = threadOf(pane);
   if (!SESSION) { t.innerHTML = '<span class="muted small">点「新对话」开始</span>'; return; }
   const d = await api(`/api/session/${SESSION}`).catch(() => ({messages: []}));
-  if (!d.messages.length) { t.innerHTML = '<span class="muted small">这个会话还没有消息</span>'; }
-  else t.innerHTML = d.messages.map((m) => bubble(m.role, esc(m.content), m.meta)).join("");
-  $("#thread-meta").textContent = d.messages.length ? `${d.messages.length} 条` : "";
+  if (!d.messages.length) { t.innerHTML = '<span class="muted small">这个会话还没有消息。点下面的预设问题，或直接输入。</span>'; return; }
+  t.innerHTML = d.messages.map((m) => msgHtml(m.role, m.content, m.meta)).join("");
   t.scrollTop = t.scrollHeight;
 }
 
-/* ---------------- 提问 ---------------- */
-async function send(question) {
-  const q = (question ?? $("#q").value).trim();
-  if (!q) return;
-  if (!SESSION) await newSession();
-  const mode = $("#mode").value;
-  const thread = $("#thread");
-  if (thread.querySelector(".muted.small")) thread.innerHTML = "";
-  thread.insertAdjacentHTML("beforeend", bubble("user", esc(q)));
-  const answerEl = document.createElement("div");
-  answerEl.className = "msg assistant";
-  answerEl.innerHTML = '<div class="who">系统</div><div class="bubble"><span class="spinner"></span>执行中…</div>';
-  thread.appendChild(answerEl);
-  thread.scrollTop = thread.scrollHeight;
-
-  setBusy(true);
-  resetRun(mode);
-  $("#q").value = "";
-  try {
-    const {task_id} = await api("/api/ask/async", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({question: q, mode, session_id: SESSION}),
-    });
-    await follow(task_id, answerEl);
-    await loadSessions();
-  } catch (e) {
-    answerEl.querySelector(".bubble").innerHTML = `<div class="box err">${esc(e.message)}</div>`;
-  } finally {
-    setBusy(false);
-    $("#live").textContent = "";
-  }
+/* ---------------- 消息与内联过程 ---------------- */
+function addUser(pane, text) {
+  const t = threadOf(pane);
+  if ($(".muted.small", t) && !$(".msg", t)) t.innerHTML = "";
+  t.insertAdjacentHTML("beforeend",
+    `<div class="msg user"><div class="who">你</div><div class="bubble">${esc(text)}</div></div>`);
+  t.scrollTop = t.scrollHeight;
 }
 
-function follow(taskId, answerEl) {
-  return new Promise((resolve) => {
-    if (es) es.close();
-    es = new EventSource(`/api/events/${taskId}`);
-    es.onmessage = (ev) => {
-      try { onStep(JSON.parse(ev.data)); } catch (_) {}
-    };
-    es.addEventListener("done", async () => {
-      es.close(); es = null;
-      const st = await api(`/api/task/${taskId}`).catch(() => null);
-      if (st) {
-        CURRENT = st;
-        answerEl.querySelector(".bubble").innerHTML = esc(st.answer || "") + stampOf(st);
-        renderRun(st);
-        $("#thread").scrollTop = $("#thread").scrollHeight;
+function addAssistant(pane) {
+  const t = threadOf(pane);
+  const el = document.createElement("div");
+  el.className = "msg assistant";
+  el.innerHTML = `<div class="who">系统</div>
+    <div class="bubble">
+      <div class="act"><div class="hd"><b>执行过程</b><span class="n">0 步</span></div><div class="lines"></div></div>
+      <div class="ans"><span class="spinner"></span> <span class="txt">规划中…</span><span class="tick" data-start="${Date.now()}"></span></div>
+    </div>`;
+  t.appendChild(el);
+  t.scrollTop = t.scrollHeight;
+  const act = $(".act", el);
+  $(".hd", act).onclick = () => $(".lines", act).classList.toggle("hidden");
+  return {
+    el,
+    addAct(role, title, detail, ms, running) {
+      const lines = $(".lines", act);
+      // 上一行进入「已完成」：连图标一起改，否则会一直残留转圈
+      if (running) {
+        lines.querySelectorAll(".aline.run").forEach((n) => {
+          n.classList.remove("run");
+          $(".ic", n).textContent = "✓";
+        });
       }
-      resolve();
-    });
-    es.addEventListener("timeout", () => { es.close(); es = null; resolve(); });
-    es.onerror = () => { if (es) { es.close(); es = null; } resolve(); };
-  });
+      const row = document.createElement("div");
+      row.className = "aline" + (running ? " run" : "");
+      row.innerHTML = `<span class="ic">${running ? '<span class="spinner"></span>' : "✓"}</span>
+        <span class="ag">${esc(role)}</span>
+        <span class="tl">${esc(title)}${detail ? " · " + esc(detail) : ""}</span>
+        <span class="ms">${ms ? ms + "ms" : ""}</span>`;
+      lines.appendChild(row);
+      $(".n", act).textContent = `${lines.children.length} 步`;
+      const t = el.parentElement;
+      t.scrollTop = t.scrollHeight;
+      return row;
+    },
+    setAnswer(text, html) {
+      $(".ans", el).innerHTML = html || esc(text);
+      const t = el.parentElement;
+      t.scrollTop = t.scrollHeight;
+    },
+    setThinking(text) {
+      const ans = $(".ans", el);
+      if ($(".txt", ans)) $(".txt", ans).textContent = text;
+      else ans.innerHTML = `<span class="spinner"></span> <span class="txt">${esc(text)}</span>
+        <span class="tick" data-start="${Date.now()}"></span>`;
+    },
+    done() {
+      const lines = $(".lines", act);
+      lines.querySelectorAll(".aline.run").forEach((n) => {
+        n.classList.remove("run");
+        $(".ic", n).textContent = "✓";
+      });
+      // 完成后自动收起：先把答案露出来，想看过程点一下展开
+      const total = lines.children.length;
+      if (total > 5) {
+        lines.classList.add("hidden");
+        $(".hd", act).innerHTML = `<b>执行过程</b><span class="n">${total} 步 · 点击展开</span>`;
+      }
+    },
+    addStamp(st) {
+      $(".bubble", el).insertAdjacentHTML("beforeend",
+        `<div class="stamp">${st.elapsed_ms}ms · ${MODE_LABEL[st.mode] || st.mode}</div>`);
+    },
+  };
 }
 
-const stampOf = (st) => `<div class="muted small" style="margin-top:8px">${st.elapsed_ms}ms · ${MODE_LABEL[st.mode] || st.mode}</div>`;
+/* ---------------- 右侧流程图 ---------------- */
+const FLOW_NODES = ["main", "inventory", "graph", "doc"];
 
-/* ---------------- 运行时进度 ---------------- */
-function onStep(e) {
-  const role = ROLE[e.agent] || e.agent;
-  if (e.tool === "start") { setLive(`<span class="spinner"></span>${role} 开始工作`); return; }
-  if (e.tool === "done") { appendStep(e, role, "完成"); setLive(`<span class="spinner"></span>${role} 完成`); return; }
-  if (e.tool === "use_observations") { appendStep(e, role, "步数到上限，用已取到的数据"); return; }
-  if (e.tool === "finish") { appendStep(e, role, "给出结论"); return; }
-  if (e.tool === "dispatch") { setLive(`<span class="spinner"></span>主 agent 派发：${(e.args?.tasks||[]).join(" + ")}`); appendStep(e, role, "派发"); return; }
-  appendStep(e, role, (e.args ? summarizeArgs(e.args) : ""));
-  setLive(`<span class="spinner"></span>${role} · ${e.tool}`);
-  $("#thread").scrollTop = $("#thread").scrollHeight;
+function flowHtml() {
+  return `<div class="flow" id="flow">
+    <svg id="flow-svg"></svg>
+    <div class="node main" data-k="main"><b>主 agent</b><span class="st">派发与合并</span></div>
+    <div class="node sub" data-k="inventory"><b>库存</b><span class="st">承诺 / 模拟</span></div>
+    <div class="node sub" data-k="graph"><b>图谱</b><span class="st">影响面 / 链路</span></div>
+    <div class="node sub" data-k="doc"><b>文档</b><span class="st">SOP / 合同 / 邮件</span></div>
+  </div>`;
 }
 
-function summarizeArgs(a) {
-  const s = Object.entries(a).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
-  return s.length > 60 ? s.slice(0, 60) + "…" : s;
-}
-
-function setLive(html) { $("#live").innerHTML = html || ""; }
-
-function appendStep(e, role, suffix) {
-  const body = $("#run-body");
-  if (!body.dataset.live) {
-    body.dataset.live = "1";
-    body.innerHTML = '<div class="kv"><span>实时步骤</span><b id="step-count">0</b></div><div id="steps"></div>';
+function wireFlow() {
+  const flow = $("#flow");
+  if (!flow) return;
+  const svg = $("#flow-svg");
+  const box = flow.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
+  const center = (k) => {
+    const n = $(`.node[data-k="${k}"]`, flow);
+    const r = n.getBoundingClientRect();
+    return {x: r.left - box.left + r.width / 2, y: r.top - box.top, h: r.height};
+  };
+  const from = center("main");
+  const out = [];
+  for (const k of ["inventory", "graph", "doc"]) {
+    const to = center(k);
+    const y1 = from.y + from.h;
+    const y2 = to.y;
+    out.push(`<path class="edge" data-edge="${k}" d="M ${from.x} ${y1} C ${from.x} ${y1 + 30}, ${to.x} ${y2 - 30}, ${to.x} ${y2}"/>`);
   }
-  const n = (Number($("#step-count").textContent) || 0) + 1;
-  $("#step-count").textContent = n;
-  $("#steps").insertAdjacentHTML("beforeend", `
-    <div class="step">
-      <span class="ag">${role}</span>
-      <span class="tl">${e.tool}${suffix ? " · " + esc(suffix) : ""}</span>
-      <span class="muted">${e.ms || 0}ms</span>
-    </div>`);
+  svg.innerHTML = out.join("");
 }
 
-/* ---------------- 右侧评测 ---------------- */
+function flowSet(k, state) {
+  const n = $(`.node[data-k="${k}"]`);
+  if (!n) return;
+  n.classList.toggle("active", state === "active");
+  n.classList.toggle("done", state === "done");
+  const e = $(`.edge[data-edge="${k}"]`);
+  if (e) {
+    e.classList.toggle("on", state === "active");
+    e.classList.toggle("done", state === "done");
+  }
+}
+function flowReset() {
+  $$(".node").forEach((n) => n.classList.remove("active", "done"));
+  $$(".edge").forEach((e) => e.classList.remove("on", "done"));
+}
+
+/* ---------------- 评测面板 ---------------- */
 function resetRun(mode) {
-  $("#run-body").innerHTML = `<div class="kv"><span>模式</span><b>${mode}</b></div>
-    <div class="kv"><span>状态</span><b><span class="dot run"></span>运行中</b></div>`;
-  $("#run-body").dataset.live = "";
+  $("#run-body").innerHTML = `
+    <div class="kv"><span>模式</span><b>${MODE_LABEL[mode] || mode}</b></div>
+    <div class="kv"><span>状态</span><b><span class="spinner"></span> 运行中</b></div>
+    ${flowHtml()}
+    <div class="kv"><span>实时步骤</span><b id="step-count">0</b></div>
+    <div id="steps"></div>`;
   $("#run-meta").textContent = "";
+  wireFlow(); flowReset();
+  flowSet("main", "active");
 }
 
 function renderRun(st) {
   const timings = st.agent_timings || {};
   const rows = Object.entries(timings).map(([name, t]) => `
-    <tr>
-      <td>${ROLE[name] || name}</td>
-      <td class="n">${t.ms}</td>
-      <td class="n">${t.steps}</td>
-      <td class="small">${t.degraded ? '<span class="pill" style="background:#fdecea;color:#b42318">退回确定性</span>' : '<span class="pill">自主</span>'}</td>
-    </tr>`).join("");
+    <tr><td>${ROLE[name] || name}</td><td class="n">${t.ms}</td><td class="n">${t.steps}</td>
+    <td class="small">${t.degraded
+      ? '<span class="pill" style="background:#fdecea;color:#b42318">退回确定性</span>'
+      : '<span class="pill">自主</span>'}</td></tr>`).join("");
   const tools = Object.entries(timings).map(([name, t]) =>
-    (t.tools || []).length ? `<div class="small muted">${ROLE[name] || name}：${t.tools.join(" → ")}</div>` : "").join("");
+    (t.tools || []).length
+      ? `<div class="small muted">${ROLE[name] || name}：${t.tools.join(" → ")}</div>` : "").join("");
   const v = st.verification || {};
   const issues = (v.issues || []).map((i) => `<div class="small">[${i.level}] ${esc(i.msg)}</div>`).join("")
     || '<div class="small">没有发现问题</div>';
@@ -324,16 +504,237 @@ function renderRun(st) {
   $("#run-body").innerHTML = `
     <div class="kv"><span>模式</span><b>${MODE_LABEL[st.mode] || st.mode}</b></div>
     <div class="kv"><span>总耗时</span><b>${st.elapsed_ms}ms</b></div>
-    <div class="kv"><span>提问意图</span><b>${(st.parsed||{}).intent || "-"}</b></div>
+    <div class="kv"><span>意图</span><b>${INTENT_LABEL[(st.parsed || {}).intent] || (st.parsed || {}).intent || "-"}</b></div>
+    ${flowHtml()}
     <table class="t"><thead><tr><th>角色</th><th class="n">耗时</th><th class="n">步</th><th>路径</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="4" class="muted">无</td></tr>'}</tbody></table>
     ${tools}
     <div class="box ${v.passed ? "ok" : "err"}"><b>校验${v.passed ? "通过" : "未通过"}</b>${issues}</div>`;
-  $("#run-meta").textContent = st.elapsed_ms ? `${st.elapsed_ms}ms` : "";
+  $("#run-meta").textContent = `${st.elapsed_ms}ms`;
+  wireFlow();
+  // 收尾后：派发过的子 agent 标绿，未派发的保持灰
+  flowSet("main", "done");
+  for (const k of ["inventory", "graph", "doc"]) {
+    const el = $(`.node[data-k="${k}"]`);
+    const hit = (timings[k] || timings[{"inventory": "inventory"}[k]]);
+    if (hit && !hit.degraded) flowSet(k, "done");
+  }
+}
+
+/* ---------------- SSE 跟进 ---------------- */
+function handleEvent(pane, e, asst) {
+  const role = ROLE[e.agent] || e.agent;
+  if (["inventory", "graph", "doc"].includes(e.agent)) {
+    if (e.tool === "start") flowSet(e.agent, "active");
+    if (e.tool === "done") flowSet(e.agent, "done");
+  }
+  if (e.agent === "main" || e.agent === "planner") {
+    if (e.tool === "dispatch" || e.tool === "compare_rule" || e.tool === "impact_scope") {
+      flowSet("main", "active");
+    }
+  }
+  let title = e.tool, detail = "", running = true;
+  if (e.tool === "start") { title = "开始工作"; }
+  else if (e.tool === "done") { running = false; title = "完成"; }
+  else if (e.tool === "finish") { running = false; title = "给出结论"; }
+  else if (e.tool === "use_observations") { running = false; title = "用已收集的数据作答"; }
+  else if (e.tool === "dispatch") { title = "派发"; detail = (e.args?.tasks || []).join(" + "); }
+  else if (e.tool === "impact_scope") {
+    title = "重算影响面"; detail = `${e.args?.rule || ""} · ${e.args?.threshold || "-"} 天`;
+  } else if (e.tool === "compare_rule") { title = "规则前后对比"; }
+  else if (e.tool === "vector_search") { title = "向量检索"; }
+  else if (e.tool === "force_lookup") { title = "补齐列表"; }
+  else if (e.args) { detail = brief(e.args); }
+
+  asst.addAct(role, title, detail, e.ms, running);
+  if (running) asst.setThinking(`${role} · ${title}`);
+  // 右面板步骤行
+  const steps = $("#steps");
+  if (steps) {
+    steps.insertAdjacentHTML("beforeend", `<div class="step"><span>${esc(role)}</span>
+      <span>${esc(title)}${detail ? " · " + esc(detail) : ""}</span>
+      <span class="muted">${e.ms || 0}ms</span></div>`);
+    const c = $("#step-count");
+    if (c) c.textContent = String(Number(c.textContent || 0) + 1);
+  }
+}
+
+function brief(a) {
+  const s = Object.entries(a).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
+  return s.length > 48 ? s.slice(0, 48) + "…" : s;
+}
+
+function follow(pane, taskId, asst) {
+  return new Promise((resolve) => {
+    const key = taskId + ":" + pane;
+    streams[key] = new EventSource(`/api/events/${taskId}`);
+    const es = streams[key];
+    es.onmessage = (ev) => {
+      try { handleEvent(pane, JSON.parse(ev.data), asst); } catch (_) {}
+    };
+    es.addEventListener("done", async () => {
+      es.close(); delete streams[key];
+      const st = await api(`/api/task/${taskId}`).catch(() => null);
+      if (st) {
+        asst.done();
+        asst.setAnswer(st.answer || "");
+        asst.addStamp(st);
+        if (pane === "a" && !COMPARE) renderRun(st);
+      } else {
+        asst.setAnswer("", '<span class="muted">任务结果读取失败</span>');
+      }
+      resolve();
+    });
+    es.addEventListener("timeout", () => { es.close(); delete streams[key]; resolve(); });
+    es.onerror = () => { if (es) { es.close(); delete streams[key]; } resolve(); };
+  });
+}
+
+/* ---------------- 提问 ---------------- */
+async function send() {
+  const q = $("#q").value.trim();
+  if (!q) return;
+  const panes = COMPARE ? ["a", "b"] : ["a"];
+  if (!COMPARE && !SESSION) await newSession();
+
+  setBusy(true);
+  $("#q").value = "";
+  if (panes.includes("a") && !COMPARE) resetRun(modeOf("a"));
+  if (COMPARE) flowReset();
+  flowSet("main", "active");
+
+  const jobs = panes.map(async (pane) => {
+    addUser(pane, q);
+    const asst = addAssistant(pane);
+    asst.setThinking("规划中…");
+    try {
+      const {task_id} = await api("/api/ask/async", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          question: q, mode: modeOf(pane),
+          session_id: COMPARE ? null : SESSION,
+        }),
+      });
+      await follow(pane, task_id, asst);
+    } catch (err) {
+      asst.setAnswer("", `<span class="box err">${esc(err.message)}</span>`);
+    }
+  });
+  await Promise.all(jobs);
+  if (!COMPARE) await loadSessions();
+  setBusy(false);
 }
 
 function setBusy(b) {
   ["#btn-send", "#btn-new"].forEach((s) => { const el = $(s); if (el) el.disabled = b; });
+}
+
+/* ---------------- 对比模式 ---------------- */
+function toggleCompare() {
+  COMPARE = !COMPARE;
+  document.body.classList.toggle("compare", COMPARE);
+  $("#btn-compare").classList.toggle("active", COMPARE);
+  $("#pane-b").classList.toggle("hidden", !COMPARE);
+  $("#btn-compare").textContent = COMPARE ? "退出对比" : "对比模式";
+  if (COMPARE) {
+    threadOf("b").innerHTML = '<span class="muted small">同一问题，右侧用另一种模式回答</span>';
+    if (modeOf("b") === modeOf("a")) {
+      const alt = modeOf("a") === "system" ? "rag_data" : "system";
+      $(`.mode-sel[data-pane="b"]`).value = alt;
+    }
+    refreshTitles();
+  } else {
+    wireFlow();
+  }
+}
+
+function refreshTitles() {
+  for (const pane of ["a", "b"]) {
+    const t = $(`.t[data-title="${pane}"]`);
+    if (t) t.textContent = MODE_LABEL[modeOf(pane)] || modeOf(pane);
+  }
+}
+
+/* ---------------- 仓储看板 ---------------- */
+const fmt = (n) => (n === null || n === undefined ? "-" : Number(n).toLocaleString("zh-CN"));
+
+function tile(label, value, sub, cls = "") {
+  const v = typeof value === "string" ? value : fmt(value);
+  return `<div class="kpi ${cls}"><div class="l">${label}</div>
+    <div class="v">${v}</div><div class="s">${sub || ""}</div></div>`;
+}
+
+async function loadDashboard() {
+  const d = await api("/api/dashboard").catch(() => null);
+  if (!d) { $("#dash-kpis").innerHTML = '<div class="box err">看板数据读取失败</div>'; return; }
+  const o = d.overview.kpi, r = d.overview.risk;
+  $("#dash-kpis").innerHTML = [
+    tile("在库总量", o["在库总量"], `${o["库存格数"]} 个库存格 · ${o["物料数"]} 个物料`),
+    tile("可用量", o["可用量"], "按本体公式逐行计算", "warn"),
+    tile("已分配 / 扣留", `${fmt(o["已分配"])} / ${fmt(o["扣留"])}`, "分配后不可再承诺"),
+    tile("安全库存", o["安全库存"], `已到在途 ${fmt(o["已到在途"])}`),
+    tile("临期批次", r["临期批次数"], `合计 ${fmt(r["临期数量"])} 台 · ${d.overview.thresholds.expiry_warn_days} 天内`, "warn"),
+    tile("未清关（保税）", r["未清关批次数"], `合计 ${fmt(r["未清关数量"])} 台 · 命中 R2`, r["未清关批次数"] ? "bad" : ""),
+    tile("在途", r["在途数量"], `${r["在途单数"]} 张运单`),
+    tile("7 天内交付", r["7天内订单量"], `${r["7天内订单数"]} 张订单 · 待发`, "warn"),
+  ].join("");
+
+  const maxOnHand = Math.max(1, ...d.warehouses.map((w) => w.on_hand));
+  $("#dash-wh").innerHTML = `<table class="t"><thead><tr>
+      <th>仓库</th><th>类型</th><th class="n">在库</th><th class="n">可用</th>
+      <th class="n">已分配</th><th class="n">扣留</th><th class="n">临期</th><th style="width:130px">占用率</th>
+    </tr></thead><tbody>${d.warehouses.map((w) => {
+      const typeTag = w.type === "bonded" ? '<span class="tag b">保税</span>'
+        : w.type === "service_parts" ? '<span class="tag">备件</span>' : '<span class="tag">成品</span>';
+      const cls = w.occupancy >= 40 ? "bad" : w.occupancy >= 25 ? "warn" : "";
+      return `<tr><td><b>${esc(w.name)}</b> <span class="small muted">${esc(w.city)} · ${w.cells} 格</span></td>
+        <td>${typeTag}</td><td class="n">${fmt(w.on_hand)}</td><td class="n"><b>${fmt(w.available)}</b></td>
+        <td class="n">${fmt(w.allocated)}</td><td class="n">${fmt(w.hold)}</td>
+        <td class="n">${w.expiring || "-"}</td>
+        <td><div class="bar"><i class="${cls}" style="width:${Math.min(100, w.occupancy)}%"></i></div>
+          <div class="small muted">${w.occupancy}%</div></td></tr>`;
+    }).join("")}</tbody></table>`;
+  $("#dash-wh-meta").textContent = `共 ${d.warehouses.length} 个仓`;
+
+  $("#dash-expiring").innerHTML = d.expiring.length ? `<table class="t"><thead><tr>
+      <th>批次</th><th>物料</th><th>仓库</th><th class="n">数量</th><th class="n">剩余</th><th>清关</th>
+    </tr></thead><tbody>${d.expiring.map((b) => `<tr>
+      <td>${esc(b.id)}</td><td>${esc(b.name)}<div class="small muted">${esc(b.sku_id)}</div></td>
+      <td>${esc(b.warehouse_name)}</td><td class="n">${fmt(b.qty)}</td>
+      <td class="n">${b.expiry_days} 天</td>
+      <td>${b.cleared ? '<span class="tag">已清关</span>' : '<span class="tag r">未清关</span>'}</td></tr>`).join("")}
+    </tbody></table>` : '<span class="muted small">没有临期批次</span>';
+
+  $("#dash-flow").innerHTML = `
+    <div class="small muted" style="margin-bottom:6px">在途</div>
+    ${d.inbound.map((s) => `<div class="kv" style="padding:3px 0">
+      <span>${esc(s.id)} · ${esc(s.name)} → ${esc(s.warehouse_name || "-")}</span>
+      <b>${fmt(s.qty)} 台 · ${s.eta_days} 天</b></div>`).join("")}
+    <div class="small muted" style="margin:10px 0 6px">7 天内交付</div>
+    ${d.due_orders.map((s) => `<div class="kv" style="padding:3px 0">
+      <span>${esc(s.id)} · ${esc(s.customer)} · ${esc(s.name)}</span>
+      <b>${fmt(s.qty)} 台 · ${s.due_days} 天</b></div>`).join("")}`;
+
+  $("#dash-skus").innerHTML = `<table class="t"><thead><tr>
+      <th>物料</th><th>类别</th><th class="n">在库</th><th class="n">可用</th>
+      <th class="n">已分配</th><th class="n">扣留</th><th class="n">可用缺口</th>
+    </tr></thead><tbody>${d.top_skus.map((s) => `<tr>
+      <td><b>${esc(s.sku)}</b><div class="small muted">${esc(s.name)}</div></td>
+      <td>${esc(s.category)}</td><td class="n">${fmt(s.on_hand)}</td>
+      <td class="n"><b>${fmt(s.available)}</b></td><td class="n">${fmt(s.allocated)}</td>
+      <td class="n">${fmt(s.hold)}</td>
+      <td class="n">${s.gap ? `<span class="tag r">${fmt(s.gap)}</span>` : "-"}</td></tr>`).join("")}
+    </tbody></table>`;
+}
+
+function switchView(which) {
+  const dash = which === "dash";
+  $("#view-chat").classList.toggle("hidden", dash);
+  $("#view-dash").classList.toggle("hidden", !dash);
+  $("#tab-chat").classList.toggle("on", !dash);
+  $("#tab-dash").classList.toggle("on", dash);
+  $("#btn-compare").style.visibility = dash ? "hidden" : "visible";
+  if (dash) loadDashboard();
 }
 
 /* ---------------- 其余 ---------------- */
@@ -347,8 +748,9 @@ async function loadHealth() {
     const ok = [h.mysql === true, h.neo4j === true, String(h.milvus).startsWith("milvus")].filter(Boolean).length;
     $("#b-db").textContent = `db mysql:${h.mysql ? "on" : "off"} neo4j:${h.neo4j ? "on" : "off"} milvus:${h.milvus}`;
     $("#b-db").className = "badge " + (ok === 3 ? "on" : "off");
-  } catch (e) {
-    $("#b-db").textContent = "服务未就绪"; $("#b-db").className = "badge off";
+  } catch (_) {
+    $("#b-db").textContent = "服务未就绪";
+    $("#b-db").className = "badge off";
   }
 }
 
@@ -356,7 +758,7 @@ async function loadPresets() {
   const list = await api("/api/demo").catch(() => []);
   $("#presets").innerHTML = list.map((q) =>
     `<span class="preset" data-q="${esc(q.text)}"><b>${q.id}</b> ${esc(q.text)}</span>`).join("");
-  document.querySelectorAll(".preset").forEach((el) => {
+  $$(".preset").forEach((el) => {
     el.onclick = () => { $("#q").value = el.dataset.q; $("#q").focus(); };
   });
 }
@@ -365,12 +767,11 @@ let ONTO = false;
 async function toggleOntology() {
   ONTO = !ONTO;
   const card = $("#onto-card");
-  if (!card) return;
   card.classList.toggle("hidden", !ONTO);
   if (!ONTO) return;
   const o = await api("/api/ontology");
   $("#onto-meta").textContent = `${o.version} · ${o.classes.length} 类 · ${o.relations.length} 关系 · ${o.rules.length} 规则`;
-  const classes = o.classes.map((c) => `<div class="small">${c.name}：${(c.props||[]).join(", ")}</div>`).join("");
+  const classes = o.classes.map((c) => `<div class="small">${c.name}：${(c.props || []).join(", ")}</div>`).join("");
   const metrics = o.metrics.map((m) => `<div class="small"><b>${m.label}</b> = ${esc(m.formula)}</div>`).join("");
   const rules = o.rules.map((r) => `<div class="small" style="display:flex;gap:8px;align-items:center">
       <b>${r.id}</b><span>${esc(r.label)}</span>
@@ -387,31 +788,61 @@ async function toggleRule(id, enabled) {
   await loadHealth();
 }
 
-$("#btn-send").onclick = () => send();
+/* ---------------- 初始化 ---------------- */
+for (const pane of ["a", "b"]) {
+  $(`.mode-sel[data-pane="${pane}"]`).innerHTML = MODES.map(([v, l]) =>
+    `<option value="${v}">${l}</option>`).join("");
+}
+
+$("#btn-send").onclick = send;
+$("#btn-compare").onclick = toggleCompare;
+$("#btn-new").onclick = newSession;
+$("#btn-onto").onclick = toggleOntology;
+$("#tab-chat").onclick = () => switchView("chat");
+$("#tab-dash").onclick = () => switchView("dash");
+$("#btn-logout").onclick = async () => {
+  await fetch("/api/logout", {method: "POST"}).catch(() => {});
+  location.href = "/login";
+};
+$$(".mode-sel").forEach((sel) => sel.onchange = refreshTitles);
 $("#q").addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
 });
-$("#btn-new").onclick = newSession;
-$("#btn-onto").onclick = toggleOntology;
+window.addEventListener("resize", wireFlow);
+
+setInterval(() => {
+  $$(".tick[data-start]").forEach((el) => {
+    const s = ((Date.now() - Number(el.dataset.start)) / 1000).toFixed(0);
+    el.textContent = ` · ${s}s`;
+  });
+}, 250);
 
 (async () => {
-  await loadHealth(); await loadPresets();
-  if (!SESSION) await newSession(); else { await loadSessions(); await loadThread(); }
+  const me = await api("/api/me").catch(() => null);
+  if (me) $("#b-user").textContent = "管理员 " + (me.user || "");
+  await loadHealth();
+  await loadPresets();
+  refreshTitles();
+  wireFlow();
+  if (!SESSION) await newSession();
+  else { await loadSessions(); await loadThread("a"); }
+  if (!threadOf("a").children.length) {
+    threadOf("a").innerHTML = '<span class="muted small">这个会话还没有消息。点下面的预设问题，或直接输入。</span>';
+  }
   setInterval(loadHealth, 20000);
+
   const params = new URLSearchParams(location.search);
+  if (params.get("compare") === "1") toggleCompare();
+  if (params.get("mode")) { $(".mode-sel[data-pane='a']").value = params.get("mode"); refreshTitles(); }
+  if (params.get("modeB")) { $(".mode-sel[data-pane='b']").value = params.get("modeB"); refreshTitles(); }
   const want = params.get("q");
   if (want) {
     const list = await api("/api/demo").catch(() => []);
     const hit = list.find((x) => x.id.toLowerCase() === want.toLowerCase());
     $("#q").value = hit ? hit.text : want;
-    if (params.get("mode")) $("#mode").value = params.get("mode");
     await send();
   }
 })();
 </script>
-<div class="card hidden" id="onto-card" style="position:fixed;right:16px;bottom:16px;width:420px;max-height:70vh;overflow:auto;z-index:20">
-  <div class="card-h">本体定义 <span class="small muted" id="onto-meta"></span></div>
-  <div id="onto-body" style="padding:10px"></div>
-</div>
 </body>
 </html>

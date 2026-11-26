@@ -58,10 +58,26 @@ CELLS = [
 ]
 
 
-def post(base: str, payload: dict) -> dict:
+def login(base: str) -> str:
+    """服务要登录；返回 Cookie 头。账号从环境变量读。"""
+    payload = json.dumps({"username": os.getenv("ADMIN_USER", "admin"),
+                          "password": os.getenv("ADMIN_PASSWORD", "admin12345")}).encode()
+    req = urllib.request.Request(base.rstrip("/") + "/api/login", data=payload,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.headers.get("Set-Cookie") or ""
+    pairs = [p.split(";")[0].strip() for p in raw.split(",") if "=" in p]
+    return "; ".join(p for p in pairs
+                     if not p.lower().startswith(("path", "httponly", "samesite", "max-age")))
+
+
+def post(base: str, payload: dict, cookie: str = "") -> dict:
+    headers = {"Content-Type": "application/json"}
+    if cookie:
+        headers["Cookie"] = cookie
     req = urllib.request.Request(base.rstrip("/") + "/api/ask",
                                  data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=600) as r:
         return json.loads(r.read().decode())
 
@@ -81,6 +97,7 @@ def main() -> int:
     ap.add_argument("--repeats", type=int, default=2)
     ap.add_argument("--out", default="ablation-result.json")
     args = ap.parse_args()
+    cookie = login(args.base)
 
     rows = []
     for label, mode in CELLS:
@@ -90,7 +107,7 @@ def main() -> int:
             for i in range(args.repeats):
                 t0 = time.time()
                 try:
-                    st = post(args.base, {"question": case["q"], "mode": mode})
+                    st = post(args.base, {"question": case["q"], "mode": mode}, cookie)
                 except urllib.error.HTTPError as exc:
                     print(f"  {case['name']} #{i+1}: HTTP {exc.code}")
                     runs.append({"ok": False, "missing": ["HTTP"], "forbidden": [],

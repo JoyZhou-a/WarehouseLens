@@ -13,11 +13,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.getenv("WMS_BASE", "http://127.0.0.1:8000")
+COOKIE: dict[str, str] = {}
 
 Q1 = "客户 C-2024-017 下周一要 500 台 NB-X1C-14，能承诺吗"
 Q2 = "上周合肥仓 14 寸机型缺货率为什么上升"
@@ -26,11 +28,32 @@ Q3 = "新合同允许保税仓批次提前承诺，这条规则生效会影响�
 failures: list[str] = []
 
 
+def login() -> None:
+    """服务加了登录后，脚本要先拿 cookie；账号从环境变量读，默认同 .env 占位值。"""
+    payload = {"username": os.getenv("ADMIN_USER", "admin"),
+               "password": os.getenv("ADMIN_PASSWORD", "admin12345")}
+    req = urllib.request.Request(
+        BASE + "/api/login",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.headers.get("Set-Cookie") or ""
+    for part in raw.split(";"):
+        if "=" in part and not part.strip().lower().startswith(("path", "httponly", "samesite", "max-age")):
+            k, v = part.strip().split("=", 1)
+            COOKIE[k] = v
+    if not COOKIE:
+        raise SystemExit("登录失败：没有拿到 cookie，检查 ADMIN_USER / ADMIN_PASSWORD")
+
+
 def api(path: str, payload: dict | None = None) -> dict | list:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    if COOKIE:
+        headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in COOKIE.items())
     req = urllib.request.Request(
-        BASE + path, data=data,
-        headers={"Content-Type": "application/json"} if data else {},
+        BASE + path, data=data, headers=headers,
         method="POST" if data else "GET",
     )
     with urllib.request.urlopen(req, timeout=180) as r:
@@ -48,6 +71,11 @@ def main() -> int:
         health = api("/api/health")
     except urllib.error.URLError as exc:
         print(f"服务没起来：{exc}. 先执行 python run.py")
+        return 2
+    try:
+        login()
+    except Exception as exc:  # 账号不对就没法跑后面的断言，直接退出
+        print(f"登录失败：{exc}")
         return 2
 
     print("== 依赖 ==")

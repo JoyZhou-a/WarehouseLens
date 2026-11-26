@@ -81,3 +81,12 @@ LLM_TIMEOUT = env_int("LLM_TIMEOUT", 60)
 # 是否让模型参与校验复核。默认关闭：pass/fail 只由确定性检查决定，
 # 模型复核既慢（每次多 7-10 秒）又会按自己的口径误判。
 LLM_REVIEW = env("LLM_REVIEW", "off").strip().lower() in ("1", "true", "on", "yes")
+
+# ---------------------------------------------------------------- 登录
+
+# 演示用的单管理员账号。密码和签名密钥都走环境变量，代码里只留占位默认值，
+# 部署时用 /etc/wms/wms.env 覆盖，仓库里看不到真实密码。
+ADMIN_USER = env("ADMIN_USER", "admin")
+ADMIN_PASSWORD = env("ADMIN_PASSWORD", "admin12345")
+AUTH_SECRET = env("AUTH_SECRET", "dev-only-please-change-me")
+AUTH_TTL = env_int("AUTH_TTL", 8 * 3600)
